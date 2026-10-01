@@ -1,0 +1,85 @@
+{
+  "poll_interval_seconds": 10,
+  "max_event_age_seconds": 600,
+  "pages": {
+    "YOUR_FACEBOOK_PAGE_ID": {
+      "enabled": true,
+      "token_env": "PANCAKE_PAGE_1_TOKEN",
+      "page_access_token": "",
+      "skip_assigned": true,
+      "stop_tags": [],
+      "rules": [
+        {
+          "id": "human",
+          "keywords": [
+            "gặp nhân viên"
+          ],
+          "action": "handoff"
+        },
+        {
+          "id": "price-comment",
+          "channels": [
+            "COMMENT"
+          ],
+          "keywords": [
+            "giá",
+            "bao nhiêu"
+          ],
+          "reply": "Chào {name}, bạn quan tâm mẫu nào?"
+        },
+        {
+          "id": "shipping",
+          "channels": [
+            "INBOX"
+          ],
+          "keywords": [
+            "ship"
+          ],
+          "reply": "Bạn cần giao đến tỉnh/thành nào?",
+          "next_state": "awaiting_location"
+        },
+        {
+          "id": "shipping-location",
+          "channels": [
+            "INBOX"
+          ],
+          "state": "awaiting_location",
+          "keywords": [],
+          "reply": "Nhân viên sẽ kiểm tra và tư vấn tiếp.",
+          "next_state": "human"
+        }
+      ],
+      "discount_followup": {
+        "enabled": false,
+        "incomplete_after_seconds": 7200,
+        "hesitation_after_seconds": 300,
+        "max_customer_age_seconds": 82800,
+        "discount_price": "",
+        "hesitation_keywords": [
+          "chưa muốn lấy",
+          "chưa mua",
+          "để suy nghĩ",
+          "để chị suy nghĩ",
+          "giá cao",
+          "đắt quá",
+          "mắc quá"
+        ],
+        "hesitation_reply": "Dạ chị cứ cân nhắc thêm nhé, khi cần chị nhắn shop hỗ trợ ạ.",
+        "message": "Chị {name} ơi, shop có giá ưu đãi {discount_price} cho mẫu chị đang quan tâm. Nếu chị muốn lấy, chị gửi thêm {missing_fields} để shop tư vấn tiếp nhé ạ."
+      },
+      "llm": {
+        "enabled": false,
+        "model": "gpt-5.4-nano",
+        "api_key_env": "OPENAI_API_KEY",
+        "daily_budget_usd": 1.0,
+        "max_calls_per_conversation": 10,
+        "timeout_seconds": 10,
+        "max_output_tokens": 1024,
+        "max_input_bytes": 24000,
+        "faq": [],
+        "api_key": "",
+        "history_turns": 8
+      }
+    }
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "pages": {
+    "122526837503326": {
+      "groups": {
+        "0": [
+          {
+            "message": "Dạ chào chị #{FULL_NAME} ạ, e đã gửi tin nhắn báo giá cho mình rồi ạ, chị vào Messenger Hoặc chị để lại SĐT e tư vấn cho mình chị nhé!"
+          }
+        ],
+        "1": [
+          {
+            "message": "Em xin phép gọi điện thoại để tư vấn SIZE và báo giá cho mình luôn ạ. Chị nghe máy nha chị #{FULL_NAME}"
+          }
+        ],
+        "2": [
+          {
+            "message": "👉👉👉👉chị #{FULL_NAME} \r\n\r\nSet đồ áo Dài Cách Tân  Cực Hợp Tiệc Cưới , Đi Du Lịch , Đi Chùa , Đi Du Xuân Đầu Năm \r\n👉 Shop Em Xin Gửi Các Chị Giá\r\n\r\n✔️ 429k/1 bộ Miễn Ship\r\n✔️800k/2 bộ Miễn Ship\r\n❤️ƯU ĐÃI SIÊU ĐẶC BIỆT 3 BỘ CHỈ  1100k\r\nCAM KẾT BÁN HÀNG ĐẸP BẰNG CÁI TÂM VÀ SỰ UY TÍN"
+          },
+          {
+            "photos": [
+              "https://content.pancake.vn/2-25/2025/9/24/8aacf2c2b0d0ed1d736aad0afe27eec89b9c6bcb.jpg",
+              "https://content.pancake.vn/2-25/2025/9/24/8790776901ad40ffa857f7f1bd946ad484e236a3.jpg",
+              "https://content.pancake.vn/2-25/2025/9/24/b951670415f556e3a668e4e39bb1c31e17232104.jpg"
+            ]
+          },
+          {
+            "message": "👉👉Bên e Thiết kế chất Vải Lụa Mỹ cao cấp mềm, mịn, thoáng khí, k nhăn. Phom SUÔNG ĐỨNG KO BÓ SÁT nên Mặc cực kì thoải mái, có thể giặt Máy mà k bị bai xù hay nhão ạ❤️"
+          },
+          {
+            "message": "Chị cho em xin chiều cao cân nặng tư vấn size nha ạ !"
+          }
+        ],
+        "3": [
+          {
+            "message": "Bảng sz ạ\r\n\r\nSz S : 42- 48kg\r\nSz M : 49- 55kg\r\nSz L :56- 61kg\r\nSz XL: 62- 69kg\r\nSz 2XL: 70- 80kg"
+          }
+        ],
+        "4": [
+          {
+            "message": "C iu Sz nào ạ??😘"
+          }
+        ],
+        "5": [
+          {
+            "message": "Chị cho e xin chiều cao cân nặng, em tư vấn size cho chị ạ"
+          }
+        ]
+      },
+      "prompts": {
+        "comment": "Dạ chào chị #{FULL_NAME}, chị nhắn Messenger cho shop để được báo giá và tư vấn size nhé ạ!",
+        "phone": "Chị cho shop xin số điện thoại liên hệ nhận hàng nhé ạ.",
+        "address": "Chị cho shop xin địa chỉ nhận hàng đầy đủ: số nhà/tên đường hoặc thôn/ấp, phường/xã và tỉnh/thành phố nhé ạ.",
+        "size_confirm": "Theo bảng cân nặng, shop gợi ý size {size}. Chị xác nhận chọn size {size} giúp shop nhé ạ; nếu muốn mặc rộng hơn chị cho shop biết để nhân viên tư vấn thêm.",
+        "size_unclear": "Shop chưa xác định chắc size phù hợp. Chị cho shop biết size muốn chọn (S, M, L, XL, 2XL), hoặc nhắn “nhân viên” để được tư vấn nhé ạ.",
+        "confirm": "Shop ghi nhận: size {size}; SĐT {phone}; địa chỉ {address}. Chị kiểm tra và nhắn “đúng rồi” nếu thông tin chính xác, hoặc gửi lại phần cần sửa nhé ạ.",
+        "complete": "Shop đã nhận đủ thông tin của chị và chuyển sang bước nhân viên kiểm tra sản phẩm, xác nhận đơn. Cảm ơn chị ạ!",
+        "human": "Shop đã ghi nhận yêu cầu tư vấn của chị. Chị vui lòng chờ nhân viên hỗ trợ nhé ạ.",
+        "stop": "Dạ shop ghi nhận, bot sẽ dừng nhắn tại cuộc trò chuyện này ạ.",
+        "color": "Chị chọn màu nào ạ? Shop có các màu: {colors}."
+      },
+      "product": {
+        "colors": []
+      }
+    }
+  }
+}

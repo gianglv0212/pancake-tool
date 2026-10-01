@@ -1,0 +1,1005 @@
+openapi: 3.0.0
+info:
+  title: Pancake Webhooks
+  version: 1.0.0
+  description: |
+    Pancake Webhooks allows you to receive real-time HTTP notifications of changes to specific objects in the Pancake system — instead of constantly polling the API.
+
+    ## How It Works
+
+    When an event occurs (e.g. a new message from a customer), Pancake sends an **HTTP POST** request to the endpoint URL you have registered, with a JSON body containing the full details of the event.
+
+    ---
+
+    ## Setup Requirements
+
+    1. **Create a server endpoint** — Your endpoint must accept HTTP POST requests and return HTTP `200` to acknowledge receipt.
+
+    2. **Subscription connections** — Each page that enables the Webhook feature consumes 1 additional connection slot in your Pancake subscription.<br/><br/>
+        **What you need to do:**<br/>
+        Open your **Subscription settings** and make sure you have at least one free connection slot for each page you want to enable Webhooks on. If you don't have enough, **upgrade your plan or buy more connection slots** first.
+
+        > **Example:** If your subscription includes 10 connection slots and you already use 4 pages without Webhooks (4 slots used), enabling Webhooks on 3 of those pages will consume 3 more slots (1 slot per page) — for a total of 7 slots used, leaving 3 slots available.
+
+        <figure style="margin: 16px 0; max-width: 800px;">
+          <img src="https://content.pancake.vn/2-2603/2026/3/25/b0a85478c4c090e73aae1fe9fabd60b9a70c7fb5.png" alt="Subscribe" style="max-width: 800px; height: auto; border: 1px solid #ddd; border-radius: 8px;" />
+          <figcaption style="font-size: 14px; color: #666; font-style: italic; margin-top: 8px;">Subscription settings</figcaption>
+        </figure>
+
+        <figure style="margin: 16px 0; max-width: 600px;">
+          <img src="https://content.pancake.vn/2-2603/2026/3/25/e2fb53c5acbd51946c2ed4b64ef5e38935268933.png" alt="Activating Webhook feature" style="max-width: 600px; height: auto; border: 1px solid #ddd; border-radius: 8px;" />
+          <figcaption style="font-size: 14px; color: #666; font-style: italic; margin-top: 8px;">Activating the Webhook feature for this page will consume 1 additional connection slot from your subscription.</figcaption>
+        </figure>
+
+
+    3. **Configure in settings** — Set up the webhook URL in your page's tools settings (requires admin permission).
+        <figure style="margin: 16px 0; max-width: 800px;">
+          <img src="https://statics.pancake.vn/pancake-docs/2025/6/26/SCR-20250626-jxxi.png" alt="Verify your endpoint URL" style="max-width: 800px; height: auto; border: 1px solid #ddd; border-radius: 8px;" />
+          <figcaption style="font-size: 14px; color: #666; font-style: italic; margin-top: 8px;">Verify your endpoint URL</figcaption>
+        </figure>
+
+    ---
+
+    ## Event Types
+
+    | Event | Description |
+    |-------|-------------|
+    | [`messaging`](https://developer.pancake.biz/webhook#/webhooks/messaging/post) | Triggered when a new message is received or an existing message is updated in inbox or comments |
+    | [`conversation`](https://developer.pancake.biz/webhook#/webhooks/conversation/post) | Triggered when a conversation is updated — e.g. assignment, tags, read/seen status, or a new message snippet |
+    | [`subscription`](https://developer.pancake.biz/webhook#/webhooks/subscription/post) | A Subscription event is used to notify your system whenever there are updates or changes related to users or pages that your app has subscribed to. |
+    | [`post`](https://developer.pancake.biz/webhook#/webhooks/post/post) | Triggered whenever a post is created or when any of its fields are updated |
+    | [`connect_status`](https://developer.pancake.biz/webhook#/webhooks/connect_status/post) | Triggered when the page's connection status to the platform changes (e.g. `connected` / `disconnected`) |
+
+    ---
+    <br/>
+
+    ## Webhook Suspension Due to High Error Rate
+
+      To maintain system stability and avoid sending events to unavailable endpoints, Pancake may **temporarily suspend a webhook** when a high error rate is detected.
+
+      A webhook will be **automatically suspended** if the following conditions occur **within a 30-minute period**:
+
+      - The **error rate exceeds 80%**
+      - The **total number of failed requests is greater than or equal to 300**
+
+      A request is considered **failed** in the following cases:
+
+      - The endpoint returns an **HTTP status code outside the 2xx range**
+      - The endpoint **times out or does not respond**
+      - A **network connection error** occurs when sending the webhook request
+
+      When a webhook is suspended, Pancake will **stop sending webhook events** to the configured endpoint until the webhook is re-enabled.
+
+    ---
+
+
+    ## How to Re-enable the Webhook
+
+      To resume receiving webhook events:
+
+      1. Ensure your webhook endpoint is **working correctly and can return a valid response**.
+      2. Log in to **Pancake**.
+      3. Go to **Webhook Settings**.
+      4. **Enable the webhook again**.
+
+      Once re-enabled, Pancake will continue sending **new webhook events** to your endpoint.
+
+      <img src="https://statics.pancake.vn/pancake-docs/2026/3/6/31f8d246-56f2-439a-b832-95bbace79bc7_Screenshot%202026-03-06%20at%2014.10.14.png" alt="Webhook Settings" style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 8px; margin-top: 10px;" />
+
+    ---
+
+
+    ## Best Practices for Webhook Endpoints
+
+      To avoid webhook suspension and ensure reliable event delivery, we recommend the following:
+
+      - **Return HTTP 200 quickly** after receiving the webhook request.
+      - Process webhook data **asynchronously** (e.g., using a queue or background job).
+      - Ensure the endpoint response time is **short (preferably under 5 seconds)**.
+      - Implement **retry-safe (idempotent) processing** in case events are delivered more than once.
+      - Monitor your endpoint for **availability and error rates**.
+
+      Following these practices helps maintain stable webhook integration and prevents automatic suspension.
+
+  contact:
+    name: Pancake Support
+    url: 'https://www.pancake.biz/contact'
+
+webhooks:
+  messaging:
+    post:
+      summary: Messaging event
+      description: |
+        Pancake sends an HTTP POST request to your registered endpoint when a new message is received or updated in inbox/comment.
+
+        **Note:** Your endpoint must return HTTP `200` to acknowledge the webhook.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookPayload'
+            example:
+              page_id: "tt_6711731671916708866"
+              event_type: "messaging"
+              data:
+                conversation:
+                  id: "tt_0:1:6570511458700967938:6711731671916708866"
+                  assignee_ids:
+                    - "62fdbc48-2ad5-4711-9a74-943ca3638386"
+                  from:
+                    id: "tt_6570511458700967938"
+                    name: "Jineo"
+                  is_combined: false
+                  is_removed: false
+                  is_replied: false
+                  read_watermarks: null
+                  seen: false
+                  snippet: "alo abc"
+                  tags: []
+                  type: "INBOX"
+                message:
+                  id: "tt_7452304119832249857"
+                  conversation_id: "tt_0:1:6570511458700967938:6711731671916708866"
+                  page_id: "tt_6711731671916708866"
+                  message: "alo abc"
+                  original_message: "alo abc"
+                  rich_message: null
+                  type: "INBOX"
+                  inserted_at: "2024-12-25T11:06:07.000000"
+                  from:
+                    id: "tt_6570511458700967938"
+                    name: "Jineo"
+                    page_customer_id: "ddc7b38d-e23a-4bf6-8151-5bfc46105839"
+                  attachments: []
+                  has_phone: false
+                  phone_info: []
+                  is_hidden: false
+                  is_parent: false
+                  is_parent_hidden: false
+                  is_removed: false
+                  like_count: null
+                  user_likes: false
+                  edit_history: null
+                  parent_id: null
+                  private_reply_conversation: null
+                  removed_by: null
+                  show_info: true
+                  can_comment: false
+                  can_hide: false
+                  can_like: false
+                  can_remove: false
+                  can_reply_privately: false
+                post:
+                  id: "tt_6711731671916708866_7119032578"
+                  page_id: null
+                  message: "trung thu đầu tiên của bé Cơ Cơ. dân chơi 4 đèn 🤣"
+                  type: "COMMENT"
+                  inserted_at: "2023-09-29T16:00:37"
+                  story: null
+                  admin_creator: null
+                  from:
+                    id: "tt_6711731671916708866"
+                    name: "nF store VN"
+                  attachments:
+                    ids:
+                      - "7284278413119032578"
+                    data:
+                      - type: "video"
+                        title: null
+                        description: "trung thu đầu tiên của bé Cơ Cơ"
+                        media:
+                          image:
+                            height: 1024
+                            width: 576
+                        target:
+                          id: "7284278413119032578"
+                          url: "https://v16-webapp-prime.tiktok.com/video/tos"
+                          thumbnail: "https://content.pancake.vn/2-23/2023/9/29/.jpg"
+      responses:
+        '200':
+          description: Your endpoint should return HTTP 200 to confirm the webhook was received successfully.
+
+  subscription:
+    post:
+      summary: Subscription event
+      description: |
+        A **Subscription event** is used to notify your system whenever there are updates or changes related to **users** or **pages** that your app has subscribed to. These events are automatically triggered by the platform and sent to your callback URL. They allow your application to stay in sync with subscription settings.
+
+        **Note:** Your endpoint must return HTTP `200` to acknowledge the webhook.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscriptionWebhookPayload'
+            example:
+              event_type: "subscription"
+              data:
+                subscription:
+                  accumulated_amount: 20253900000
+                  activated_at: "2024-11-26T03:08:51"
+                  auto_config: false
+                  currency: "VND"
+                  duration: 6
+                  expired_at: "2025-05-25T03:08:48"
+                  id: "A12SDA"
+                  inserted_at: "2024-11-26T03:08:51"
+                  is_activated: true
+                  is_paid: true
+                  owner_id: "6a00ea1f-af2c-4e3e-8f96-46ed462e2243"
+                  page_count: 120
+                  page_ids: 
+                    - "In_1660919956"
+                    - "tl_6791248854"
+                  payment_amount: 20253900000
+                  shared_accounts: 
+                    - "696cd302-206f-4788-adc3-16f29ddcb646"
+                  type: "pancake"
+                  upgrade_from: null
+                  user_count: 400
+                  user_ids: 
+                    - "27f0fa6f-4ae4-4d87-b2a4-4f3ff997af6f"
+                    - "6a00ea1f-af2c-4e3e-8f96-46ed462e2243"
+      responses:
+        '200':
+          description: Your endpoint should return HTTP 200 to confirm the webhook was received successfully.
+
+  post:
+    post:
+      summary: Post event
+      description: |
+        The **Post event webhook** is triggered whenever a post is created or when any of its fields are updated. This webhook returns the full set of post information, including metadata such as the post ID, creation time, author, title, attachments, and any additional story content.
+
+        It allows your system to stay synchronized with the latest updates to posts, enabling real-time content tracking, notifications, or content moderation workflows based on post data changes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostWebhookPayload'
+            example:
+              event_type: "post"
+              page_id: "102816772637000"
+              data:
+                post:
+                  admin_creator: null
+                  attachments:
+                    data:
+                      - description: null
+                        media:
+                          image:
+                            height: 720
+                            width: 720
+                        target:
+                          id: "128718770046800"
+                          url: "https://www.facebook.com/1028167.103448482573829/128718770046800/"
+                        title: null
+                        type: "photo"
+                    ids:
+                      - "128718770046800"
+                    target:
+                      id: "128718770046800"
+                      url: "https://www.facebook.com/10281.103448482573829/128718770046800/"
+                    title: null
+                    type: "photo"
+                  from:
+                    id: "102816772637000"
+                    name: "Nước gạo rang"
+                  id: "102816772637000_128718810046796"
+                  inserted_at: "2022-12-15T04:02:01"
+                  message: |-
+                    GẠO LỨT ĐỎ CHO CƠ THỂ KHỎE MẠNH 
+
+                    Được làm từ nguồn nguyên...
+                  story: null
+                  type: "livestream"
+      responses:
+        '200':
+          description: Your endpoint should return HTTP 200 to confirm the webhook was received successfully.
+
+  conversation:
+    post:
+      summary: Conversation event
+      description: |
+        Pancake sends an HTTP POST request to your registered endpoint whenever a conversation is updated — for example, when it is assigned to a staff member, when its tags change, when it is marked as read/seen, or when a new message updates its snippet.
+
+        Use the `version` field to discard out-of-order deliveries: only apply an update if its `version` is greater than the last one you processed for that conversation.
+
+        **Note:** Your endpoint must return HTTP `200` to acknowledge the webhook.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationWebhookPayload'
+            example:
+              event_type: "conversation"
+              page_id: "100000000000001"
+              request_id: "6d536a7a-0000-0000-0000-000000000000"
+              timestamp: 1784255208
+              data:
+                conversation:
+                  id: "100000000000001_100000000000002"
+                  assignee_ids:
+                    - "22222222-2222-2222-2222-222222222222"
+                  customer_id: "11111111-1111-1111-1111-111111111111"
+                  from:
+                    email: "100000000000002@facebook.com"
+                    id: "100000000000002"
+                    name: "John Doe"
+                  is_combined: false
+                  is_removed: false
+                  is_replied: false
+                  read_watermarks:
+                    - is_group_conv: null
+                      message_id: "m_00000000000000000000000000000000"
+                      psid: "100000000000002"
+                      watermark: 1782552309
+                  seen: true
+                  snippet: "0900000000"
+                  tags: [2, 3, 4]
+                  type: "INBOX"
+                  version: 306
+      responses:
+        '200':
+          description: Your endpoint should return HTTP 200 to confirm the webhook was received successfully.
+
+  connect_status:
+    post:
+      summary: Page connection status event
+      description: |
+        Pancake sends an HTTP POST request to your registered endpoint whenever the **page's connection status** to the underlying platform changes — for example when the page is disconnected and needs to be re-authenticated.
+
+        **Note:** Your endpoint must return HTTP `200` to acknowledge the webhook.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectStatusWebhookPayload'
+            example:
+              event_type: "connect_status"
+              page_id: "100000000000001"
+              request_id: "792aab1b-0000-0000-0000-000000000000"
+              timestamp: 1784255157
+              data:
+                connect_status: "disconnected"
+                page_id: "100000000000001"
+      responses:
+        '200':
+          description: Your endpoint should return HTTP 200 to confirm the webhook was received successfully.
+
+
+
+components:
+  schemas:
+    WebhookPayload:
+      type: object
+      required:
+        - page_id
+        - event_type
+        - data
+      properties:
+        page_id:
+          type: string
+          description: ID of the Pancake page that triggered the event.
+          example: "tt_6711731671916708866"
+        event_type:
+          type: string
+          description: Type of event.
+          enum: [messaging]
+          example: "messaging"
+        data:
+          type: object
+          description: Detailed data of the event.
+          properties:
+            conversation:
+              $ref: '#/components/schemas/Conversation'
+            message:
+              $ref: '#/components/schemas/Message'
+            post:
+              $ref: '#/components/schemas/Post'
+              nullable: true
+              description: Source post information. Present only when `type` is `COMMENT`, `null` for `INBOX`.
+
+    PostWebhookPayload:
+      type: object
+      required:
+        - page_id
+        - event_type
+        - data
+      properties:
+        page_id:
+          type: string
+          description: ID of the Pancake page that triggered the event.
+          example: "102816772637000"
+        event_type:
+          type: string
+          description: Type of event
+          enum: [post]
+          example: "post"
+        data:
+          type: object
+          description: Detailed data of the event.
+          properties:
+            post:
+              $ref: '#/components/schemas/Post'
+
+    SubscriptionWebhookPayload:
+      type: object
+      required:
+        - event_type
+        - data
+      properties:
+        event_type:
+          type: string
+          description: Type of event
+          enum: [subscription]
+          example: "subscription"
+        data:
+          type: object
+          description: Detailed data of the event.
+          properties:
+            subscription:
+              $ref: '#/components/schemas/Subscription'
+
+    ConversationWebhookPayload:
+      type: object
+      required:
+        - page_id
+        - event_type
+        - data
+      properties:
+        event_type:
+          type: string
+          description: Type of event.
+          enum: [conversation]
+          example: "conversation"
+        page_id:
+          type: string
+          description: ID of the Pancake page that triggered the event.
+          example: "100000000000001"
+        request_id:
+          type: string
+          description: Unique ID of this webhook delivery, useful for logging and idempotent processing.
+          example: "6d536a7a-0000-0000-0000-000000000000"
+        timestamp:
+          type: integer
+          format: int64
+          description: Time the event was sent, as a Unix timestamp in seconds (UTC).
+          example: 1784255208
+        data:
+          type: object
+          description: Detailed data of the event.
+          properties:
+            conversation:
+              $ref: '#/components/schemas/ConversationEvent'
+
+    ConnectStatusWebhookPayload:
+      type: object
+      required:
+        - page_id
+        - event_type
+        - data
+      properties:
+        event_type:
+          type: string
+          description: Type of event.
+          enum: [connect_status]
+          example: "connect_status"
+        page_id:
+          type: string
+          description: ID of the Pancake page that triggered the event.
+          example: "100000000000001"
+        request_id:
+          type: string
+          description: Unique ID of this webhook delivery, useful for logging and idempotent processing.
+          example: "792aab1b-0000-0000-0000-000000000000"
+        timestamp:
+          type: integer
+          format: int64
+          description: Time the event was sent, as a Unix timestamp in seconds (UTC).
+          example: 1784255157
+        data:
+          type: object
+          description: Detailed data of the event.
+          properties:
+            connect_status:
+              type: string
+              enum: [connected, disconnected]
+              description: Current connection status of the page to the underlying platform — `connected` or `disconnected`.
+              example: "disconnected"
+            page_id:
+              type: string
+              description: ID of the page whose connection status changed.
+              example: "100000000000001"
+
+    ConversationEvent:
+      type: object
+      description: The conversation that was updated.
+      properties:
+        id:
+          type: string
+          description: Unique ID of the conversation.
+          example: "100000000000001_100000000000002"
+        assignee_ids:
+          type: array
+          items:
+            type: string
+          description: IDs of assigned staff members. Retrieve details via [GET /pages/{page_id}/users](https://developer.pancake.biz/#/paths/pages-page_id--users/get).
+          example: ["22222222-2222-2222-2222-222222222222"]
+        customer_id:
+          type: string
+          description: ID of the customer in the conversation. Look up via [GET /pages/{page_id}/page_customers](https://developer.pancake.biz/#/paths/pages-page_id--page_customers/get).
+          example: "11111111-1111-1111-1111-111111111111"
+        from:
+          type: object
+          description: The customer who initiated the conversation.
+          properties:
+            id:
+              type: string
+              description: Sender ID.
+              example: "100000000000002"
+            name:
+              type: string
+              description: Sender display name.
+              example: "John Doe"
+            email:
+              type: string
+              description: Sender email address.
+              example: "100000000000002@facebook.com"
+        is_combined:
+          type: boolean
+          description: Whether the conversation involves multiple customers.
+          example: false
+        is_removed:
+          type: boolean
+          description: Whether the conversation has been deleted.
+          example: false
+        is_replied:
+          type: boolean
+          description: Whether the conversation has been replied to.
+          example: false
+        read_watermarks:
+          type: array
+          nullable: true
+          description: Read markers indicating up to which point each participant has read the conversation.
+          items:
+            type: object
+            properties:
+              psid:
+                type: string
+                description: Page-scoped ID of the participant.
+                example: "100000000000002"
+              message_id:
+                type: string
+                description: ID of the last message read by the participant.
+                example: "m_00000000000000000000000000000000"
+              watermark:
+                type: integer
+                format: int64
+                description: Unix timestamp (seconds) of the read watermark.
+                example: 1782552309
+              is_group_conv:
+                type: boolean
+                nullable: true
+                description: Whether this is a group conversation.
+                example: null
+        seen:
+          type: boolean
+          description: Whether a staff member has viewed the conversation.
+          example: true
+        snippet:
+          type: string
+          description: Preview text of the latest message.
+          example: "0900000000"
+        tags:
+          type: array
+          items:
+            type: integer
+          description: List of tag IDs attached to the conversation. Retrieve details via [GET /pages/{page_id}/tags](https://developer.pancake.biz/#/paths/pages-page_id--tags/get).
+          example: [2, 3, 4]
+        type:
+          type: string
+          enum: [INBOX, COMMENT]
+          description: Conversation type — `INBOX` (direct message) or `COMMENT` (post comment).
+          example: "INBOX"
+        version:
+          type: integer
+          description: Monotonically increasing version of the conversation. Apply an update only if its `version` is greater than the last one you processed.
+          example: 306
+
+    Subscription:
+      type: object
+      description: Subscription details associated with the event.
+      properties:
+        accumulated_amount:
+          type: number
+          description: Estimated amount of the subscription package
+          example: 20253900000
+        payment_amount:
+          type: number
+          description: Actual payment amount
+          example: 20253900000
+        activated_at:
+          type: string
+          format: date-time
+          description: Activation time (UTC +0)
+          example: "2024-11-26T03:08:51"
+        auto_config:
+          type: boolean
+          description: Auto-configure subscription package (Should be turned off)
+          example: false
+        currency:
+          type: string
+          description: Currency unit
+          example: "VND"
+        duration:
+          type: integer
+          description: Duration of the subscription package (in months)
+          example: 6
+        expired_at:
+          type: string
+          format: date-time
+          description: Expiration time (UTC +0)
+          example: "2025-05-25T03:08:48"
+        id:
+          type: string
+          description: Subscription package ID
+          example: "XLW21A"
+        inserted_at:
+          type: string
+          format: date-time
+          description: Creation time (UTC +0)
+          example: "2024-11-26T03:08:51"
+        is_activated:
+          type: boolean
+          description: Activated status
+          example: true
+        is_paid:
+          type: boolean
+          description: Payment status
+          example: true
+        owner_id:
+          type: string
+          description: Subscription owner ID
+          example: "6a00ea1f-af2c-4e3e-8f96-46ed462e2243"
+        page_count:
+          type: integer
+          description: Number of pages in the package
+          example: 120
+        page_ids:
+          type: array
+          items:
+            type: string
+          description: List of page IDs
+          example:
+            - "In_1660919956"
+            - "tl_6791248854"
+        user_count:
+          type: integer
+          description: Number of users in the package
+          example: 400
+        user_ids:
+          type: array
+          items:
+            type: string
+          description: List of user IDs
+          example:
+            - "27f0fa6f-4ae4-4d87-b2a4-4f3ff997af6f"
+            - "6a00ea1f-af2c-4e3e-8f96-46ed462e2243"
+        shared_accounts:
+          type: array
+          items:
+            type: string
+          description: List of IDs of users granted package management access
+          example:
+            - "696cd302-206f-4788-adc3-16f29ddcb646"
+        type:
+          type: string
+          description: Type of subscription package
+          example: "pancake"
+        upgrade_from:
+          type: string
+          nullable: true
+          description: Upgraded from package ID
+          example: null
+
+    Conversation:
+      type: object
+      description: Conversation associated with the event.
+      properties:
+        id:
+          type: string
+          description: Unique ID of the conversation.
+          example: "tt_0:1:6570511458700967938:6711731671916708866"
+        assignee_ids:
+          type: array
+          items:
+            type: string
+          description: IDs of assigned staff members. Retrieve details via [GET /pages/{page_id}/users](https://developer.pancake.biz/#/paths/pages-page_id--users/get).
+          example: ["62fdbc48-2ad5-4711-9a74-943ca3638386"]
+        from:
+          type: object
+          description: The customer who initiated the conversation.
+          properties:
+            id:
+              type: string
+              description: Sender ID.
+              example: "tt_6570511458700967938"
+            name:
+              type: string
+              description: Sender display name.
+              example: "Jineo"
+        is_combined:
+          type: boolean
+          description: Whether the conversation involves multiple customers.
+          example: false
+        is_removed:
+          type: boolean
+          description: Whether the conversation has been deleted.
+          example: false
+        is_replied:
+          type: boolean
+          description: Whether the conversation has been replied to.
+          example: false
+        read_watermarks:
+          type: object
+          nullable: true
+          description: Timestamp of the last time the customer viewed the messages.
+        seen:
+          type: boolean
+          description: Whether a staff member has viewed the conversation.
+          example: false
+        snippet:
+          type: string
+          description: Preview text of the latest message.
+          example: "alo abc"
+        tags:
+          type: array
+          items:
+            type: integer
+          description: List of tag IDs attached to the conversation. Retrieve details via [GET /pages/{page_id}/tags](https://developer.pancake.biz/#/paths/pages-page_id--tags/get).
+          example: []
+        type:
+          type: string
+          enum: [INBOX, COMMENT]
+          description: Conversation type — `INBOX` (direct message) or `COMMENT` (post comment).
+          example: "INBOX"
+
+    Message:
+      type: object
+      description: Details of the message.
+      properties:
+        id:
+          type: string
+          description: Unique ID of the message.
+          example: "tt_7452304119832249857"
+        conversation_id:
+          type: string
+          description: ID of the conversation this message belongs to.
+          example: "tt_0:1:6570511458700967938:6711731671916708866"
+        page_id:
+          type: string
+          description: ID of the associated page.
+          example: "tt_6711731671916708866"
+        message:
+          type: string
+          description: Text content of the message.
+          example: "alo abc"
+        original_message:
+          type: string
+          description: Original content before any edits.
+          example: "alo abc"
+        rich_message:
+          type: object
+          nullable: true
+          description: Formatted message content, if applicable.
+        type:
+          type: string
+          enum: [INBOX, COMMENT]
+          description: Message type — `INBOX` or `COMMENT`.
+          example: "INBOX"
+        inserted_at:
+          type: string
+          format: date-time
+          description: Message creation timestamp (UTC).
+          example: "2024-12-25T11:06:07.000000"
+        from:
+          type: object
+          description: Sender of the message.
+          properties:
+            id:
+              type: string
+              description: Sender ID.
+              example: "tt_6570511458700967938"
+            name:
+              type: string
+              description: Sender display name.
+              example: "Jineo"
+            page_customer_id:
+              type: string
+              description: Customer ID within the Pancake platform. Use to look up via [GET /pages/{page_id}/page_customers](https://developer.pancake.biz/#/paths/pages-page_id--page_customers/get).
+              example: "ddc7b38d-e23a-4bf6-8151-5bfc46105839"
+        attachments:
+          type: array
+          items:
+            type: object
+          description: List of attached files (images, videos, documents, etc.).
+          example: []
+        has_phone:
+          type: boolean
+          description: Whether the message contains a phone number.
+          example: false
+        phone_info:
+          type: array
+          items:
+            type: object
+          description: Details of phone numbers detected in the message.
+          example: []
+        is_hidden:
+          type: boolean
+          description: Whether the message is hidden. (COMMENT only)
+          example: false
+        is_parent:
+          type: boolean
+          description: Whether this is the root message of a comment thread.
+          example: false
+        is_parent_hidden:
+          type: boolean
+          description: Whether the parent message is hidden.
+          example: false
+        is_removed:
+          type: boolean
+          description: Whether the message has been deleted.
+          example: false
+        like_count:
+          type: integer
+          nullable: true
+          description: Number of likes on the message. (COMMENT only)
+          example: null
+        user_likes:
+          type: boolean
+          description: Whether the page has liked this message. (COMMENT only)
+          example: false
+        edit_history:
+          type: object
+          nullable: true
+          description: Edit history of the message, if any.
+        parent_id:
+          type: string
+          nullable: true
+          description: ID of the parent message if this is a reply in a comment thread.
+          example: null
+        private_reply_conversation:
+          type: object
+          nullable: true
+          description: Private conversation created from replying to a comment, if any.
+        removed_by:
+          type: string
+          nullable: true
+          description: ID of the user who deleted the message, if applicable.
+          example: null
+        show_info:
+          type: boolean
+          description: Whether sender information is displayed in the UI.
+          example: true
+        can_comment:
+          type: boolean
+          description: Whether this comment can be replied to. (COMMENT only)
+          example: false
+        can_hide:
+          type: boolean
+          description: Whether this comment can be hidden. (COMMENT only)
+          example: false
+        can_like:
+          type: boolean
+          description: Whether this comment can be liked. (COMMENT only)
+          example: false
+        can_remove:
+          type: boolean
+          description: Whether this comment can be deleted. (COMMENT only)
+          example: false
+        can_reply_privately:
+          type: boolean
+          description: Whether a private message can be sent to the commenter. (COMMENT only)
+          example: false
+
+    Post:
+      type: object
+      nullable: true
+      description: Source post information. Only present when the message type is COMMENT.
+      properties:
+        id:
+          type: string
+          description: Unique ID of the post.
+          example: "tt_6711731671916708866_7119032578"
+        message:
+          type: string
+          description: Content of the post.
+          example: "trung thu đầu tiên của bé Cơ Cơ. dân chơi 4 đèn 🤣"
+        type:
+          type: string
+          description: Type of post.
+          example: "livestream"
+        inserted_at:
+          type: string
+          format: date-time
+          description: Post creation timestamp.
+          example: "2023-09-29T16:00:37"
+        story:
+          type: object
+          nullable: true
+          description: Story information, if the post is a story.
+        admin_creator:
+          type: object
+          nullable: true
+          description: Admin who created the post, if applicable.
+        from:
+          type: object
+          description: The page that published the post.
+          properties:
+            id:
+              type: string
+              description: Page ID.
+              example: "tt_6711731671916708866"
+            name:
+              type: string
+              description: Page name.
+              example: "nF store VN"
+        attachments:
+          type: object
+          description: Attachments of the post.
+          properties:
+            ids:
+              type: array
+              items:
+                type: string
+              description: List of attachment IDs.
+              example: ["7284278413119032578"]
+            data:
+              type: array
+              description: Detailed information for each attachment.
+              items:
+                type: object
+                properties:
+                  type:
+                    type: string
+                    description: File type (video, photo, etc.).
+                    example: "video"
+                  title:
+                    type: string
+                    nullable: true
+                    description: File title.
+                  description:
+                    type: string
+                    description: File description.
+                    example: "trung thu đầu tiên của bé Cơ Cơ"
+                  media:
+                    type: object
+                    description: Media dimensions.
+                    properties:
+                      image:
+                        type: object
+                        properties:
+                          height:
+                            type: integer
+                            example: 1024
+                          width:
+                            type: integer
+                            example: 576
+                  target:
+                    type: object
+                    description: File access URLs.
+                    properties:
+                      id:
+                        type: string
+                        example: "7284278413119032578"
+                      url:
+                        type: string
+                        example: "https://v16-webapp-prime.tiktok.com/video/tos"
+                      thumbnail:
+                        type: string
+                        description: Thumbnail image URL.
+                        example: "https://content.pancake.vn/2-23/2023/9/29/.jpg"

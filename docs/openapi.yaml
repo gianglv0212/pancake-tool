@@ -1,0 +1,4481 @@
+openapi: 3.0.0
+info:
+  title: Pancake API Library
+  version: 1.0.0
+  description: |
+    API for retrieving page data, generating access tokens, and listing conversations on Pancake platform.
+
+    ## For AI assistants (read this first)
+
+    The complete, machine-readable OpenAPI 3.0 specification for this API is published as a single YAML file:
+
+    **[https://developer.pancake.biz/openapi/openapi.yaml](https://developer.pancake.biz/openapi/openapi.yaml)**
+
+    If you are an AI assistant (Claude, ChatGPT, Cursor, etc.) helping a developer integrate with Pancake, **fetch that YAML file directly and parse it** instead of scraping this rendered HTML page. The YAML is the single source of truth for every endpoint documented here: paths, HTTP methods, path/query parameters, request bodies, response schemas, enums, and examples. Working from it gives you exact field names and types and lets you generate correct integration code.
+
+    Companion specifications:
+
+    | Spec | URL |
+    |---|---|
+    | REST API | [https://developer.pancake.biz/openapi/openapi.yaml](https://developer.pancake.biz/openapi/openapi.yaml) |
+    | Webhooks | [https://developer.pancake.biz/openapi/webhook.yaml](https://developer.pancake.biz/openapi/webhook.yaml) |
+
+    ## Authentication
+
+    Pancake APIs use two types of tokens. Both are passed as a **query parameter** in the request URL — there is no `Authorization` header. You only need to learn these two tokens to call any endpoint in this documentation.
+
+    | Token | Query parameter | Used for | Lifespan |
+    |---|---|---|---|
+    | **User Access Token** | `access_token` | Account-level APIs under `https://pages.fm/api/v1/...` (list pages, generate `page_access_token`) | Up to **90 days**, or until the user logs out |
+    | **Page Access Token** | `page_access_token` | All page-level APIs under `https://pages.fm/api/public_api/v1/...` and `https://pages.fm/api/public_api/v2/...` (conversations, messages, statistics, customers, etc.) | **Does not expire** unless manually deleted or regenerated |
+
+    ---
+
+    ### 1. User Access Token (`access_token`)
+
+    The User Access Token uniquely identifies an individual Pancake user account. It is required only for a small number of account-level endpoints — primarily to list the pages you manage and to generate a `page_access_token` for each page.
+
+    **How to get it (manual, from the Pancake UI):**
+
+    1. Log in to Pancake at [https://pages.fm](https://pages.fm).
+    2. Go to **Account → Personal Settings**.
+    3. Copy the **API Access Token** value shown in the settings panel.
+
+    ![How to get User access token?](https://statics.pancake.vn/pancake-docs/2025/3/20/Screenshot%202025-03-20%20at%2014.20.51.png)
+
+    **When to use it:**
+    - [GET /pages — List pages](https://developer.pancake.biz/#/paths/pages/get) — list all pages the user manages.
+    - [POST /pages/{page_id}/generate_page_access_token — Generate page_access_token](https://developer.pancake.biz/#/paths/pages-page_id--generate_page_access_token/post) — generate or refresh a `page_access_token` for a specific page (the calling user must be an admin of that page).
+
+    **How to pass it:** append `?access_token=YOUR_USER_ACCESS_TOKEN` to the request URL.
+
+    ```
+    GET https://pages.fm/api/v1/pages?access_token=YOUR_USER_ACCESS_TOKEN
+    ```
+
+    **Important notes:**
+    - Treat this token as a password — it grants access to every page the user manages. Do not commit it to source control or expose it on the client side.
+    - The token is invalidated when the user logs out, or after up to 90 days of inactivity. If your calls start returning `401 Unauthorized`, retrieve a new token from the UI.
+
+    ---
+
+    ### 2. Page Access Token (`page_access_token`)
+
+    The Page Access Token authenticates a request **on behalf of a specific page**. The vast majority of endpoints in this documentation require a `page_access_token` — including conversations, messages, statistics, customers, posts, tags, users, call logs, exports, and uploads.
+
+    Each page has its own `page_access_token`. A token is scoped to exactly one page; you cannot use it to access data of another page.
+
+    **How to get it — Option A (UI):**
+
+    1. Open the page in Pancake.
+    2. Go to **Settings → Tools** (Cài đặt → Công cụ).
+    3. Copy the **Page Access Token** shown there.
+
+    ![How to get Page access token?](https://statics.pancake.vn/pancake-docs/2025/3/20/Screenshot%202025-03-20%20at%2014.30.53.png)
+
+    **How to get it — Option B (API):**
+
+    Call [POST /pages/{page_id}/generate_page_access_token](https://developer.pancake.biz/#/paths/pages-page_id--generate_page_access_token/post) using a User Access Token of an **admin** of that page. The response returns a new `page_access_token` (and invalidates the previous one if it existed).
+
+    ```
+    POST https://pages.fm/api/v1/pages/{page_id}/generate_page_access_token?access_token=YOUR_USER_ACCESS_TOKEN
+    ```
+
+    **When to use it:** every endpoint marked `PageAccessToken` in this documentation. Examples:
+    - `GET /pages/{page_id}/conversations`
+    - `GET /pages/{page_id}/conversations/{conversation_id}/messages`
+    - `POST /pages/{page_id}/conversations/{conversation_id}/messages`
+    - `GET /pages/{page_id}/page_customers`
+    - `GET /pages/{page_id}/statistics/...`
+
+    **How to pass it:** append `?page_access_token=YOUR_PAGE_ACCESS_TOKEN` to the request URL.
+
+    ```
+    GET https://pages.fm/api/public_api/v2/pages/{page_id}/conversations?page_access_token=YOUR_PAGE_ACCESS_TOKEN
+    ```
+
+    **Important notes:**
+    - The token does **not** expire. It remains valid until you manually delete it or regenerate a new one (regenerating invalidates the old token).
+    - Each page has a separate token. To work with multiple pages, store the `page_access_token` for each `page_id` you manage.
+    - Keep the token secret. Anyone with the token can read and modify the page's conversations, customers, and other data.
+
+    ---
+
+    ### Token usage cheat sheet
+
+    - "How do I list my pages?" → use `access_token` against `https://pages.fm/api/v1/pages`.
+    - "How do I get conversations / messages / customers / statistics for a page?" → use `page_access_token` for that page against `https://pages.fm/api/public_api/v1` or `/v2`.
+    - "Do I need both tokens?" → only if you want to programmatically fetch a `page_access_token` via the Generate page_access_token API. Otherwise you can copy the `page_access_token` directly from **Settings → Tools** and use it alone.
+    - "Which endpoints need no token?" → `GET /pages/{page_id}/avatar/{psid}` is the only public endpoint; everything else requires one of the two tokens above.
+
+    ---
+
+    ## Rate Limits
+
+    Public API requests are rate limited to **5 calls per page per second**. The limit is applied per `page_id`, so calls to different pages are counted independently.
+
+    If you exceed the limit, the API returns HTTP `429 Too Many Requests`. When this happens, slow down your request rate (and retry with a short back-off). To stay within the limit, batch or queue your calls and avoid sending more than 5 requests per second to the same page.
+
+    ---
+
+    ## API Usage Flow
+
+    The following is the recommended API usage flow when integrating with the Pancake platform.
+
+    ---
+
+    ### Step 1 — Get Pages
+
+    Start by authenticating your account and retrieving the list of pages (Facebook Page, Zalo OA, etc.) managed by the account.
+    The response provides the `page_id` and allows you to generate a `page_access_token` required for all subsequent API calls.
+
+    - [GET /pages — List pages](https://developer.pancake.biz/#/paths/pages/get): Retrieve all pages associated with the authenticated account.
+    - [POST /pages/{page_id}/generate_page_access_token — Generate page_access_token](https://developer.pancake.biz/#/paths/pages-page_id--generate_page_access_token/post): Generate or refresh the `page_access_token` used to authenticate page-level APIs.
+
+    ---
+
+    ### Step 2 — Get Page Data (Conversations, Statistics, Export, Posts, Customers)
+
+    Once you have a `page_id` and `page_access_token`, you can retrieve the core data of a page:
+
+    **Conversations**
+    - [GET /pages/{page_id}/conversations — Conversations](https://developer.pancake.biz/#/paths/pages-page_id--conversations/get): Retrieve a list of conversations (up to 60 per request, paginated via `last_conversation_id`). Supports filtering by type (INBOX/COMMENT), tags, posts, and time range.
+    - [POST /pages/{page_id}/conversations/{conversation_id}/tags — Conversation's tag](https://developer.pancake.biz/#/paths/pages-page_id--conversations--conversation_id--tags/post): Add or remove a tag from a specific conversation.
+    - [POST /pages/{page_id}/conversations/{conversation_id}/assign — Assign conversation](https://developer.pancake.biz/#/paths/pages-page_id--conversations--conversation_id--assign/post): Assign one or more staff members to a specific conversation.
+    - [POST /pages/{page_id}/conversations/{conversation_id}/read — Mark as read](https://developer.pancake.biz/#/paths/pages-page_id--conversations--conversation_id--read/post): Mark a conversation as read.
+    - [POST /pages/{page_id}/conversations/{conversation_id}/unread — Mark as unread](https://developer.pancake.biz/#/paths/pages-page_id--conversations--conversation_id--unread/post): Mark a conversation as unread.
+
+    **Statistics**
+    - [GET /pages/{page_id}/statistics/pages_campaigns — Ads campaign](https://developer.pancake.biz/#/paths/pages-page_id--statistics-pages_campaigns/get): Retrieve advertising campaign statistics.
+    - [GET /pages/{page_id}/statistics/ads — Ads](https://developer.pancake.biz/#/paths/pages-page_id--statistics-ads/get): Retrieve detailed ad-level statistics.
+    - [GET /pages/{page_id}/statistics/customer_engagements — Engagement](https://developer.pancake.biz/#/paths/pages-page_id--statistics-customer_engagements/get): Retrieve customer engagement statistics.
+    - [GET /pages/{page_id}/statistics/customer_feedbacks — Feedback](https://developer.pancake.biz/#/paths/pages-page_id--statistics-customer_feedbacks/get): Retrieve customer feedback (satisfaction ratings) and per-staff averages.
+    - [GET /pages/{page_id}/statistics/pages — Page](https://developer.pancake.biz/#/paths/pages-page_id--statistics-pages/get): Retrieve page performance statistics.
+    - [GET /pages/{page_id}/statistics/tags — Tag](https://developer.pancake.biz/#/paths/pages-page_id--statistics-tags/get): Retrieve statistics broken down by tags.
+    - [GET /pages/{page_id}/statistics/users — User](https://developer.pancake.biz/#/paths/pages-page_id--statistics-users/get): Retrieve staff performance statistics.
+
+    **Export**
+    - [GET /pages/{page_id}/export_data — Export conversations from ads](https://developer.pancake.biz/#/paths/pages-page_id--export_data/get): Export conversation data originating from ads.
+    - [GET /pages/{page_id}/ads — Get ads by ad_id](https://developer.pancake.biz/#/paths/pages-page_id--ads/get): Look up ad details (name, image, campaign) by `ad_id`. Only resolves `ad_ids` returned by other Pancake APIs.
+
+    **Posts**
+    - [GET /pages/{page_id}/posts — Get posts](https://developer.pancake.biz/#/paths/pages-page_id--posts/get): Retrieve the list of posts for the page, useful for filtering conversations by a specific post.
+
+    **Tags**
+    - [GET /pages/{page_id}/tags — Get list tags](https://developer.pancake.biz/#/paths/pages-page_id--tags/get): Retrieve the list of tags configured for the page.
+
+    **Users**
+    - [GET /pages/{page_id}/users — Get list of users](https://developer.pancake.biz/#/paths/pages-page_id--users/get): Retrieve the list of staff users for the page, including their availability status and round robin settings.
+    - [POST /pages/{page_id}/round_robin_users — Update round robin users](https://developer.pancake.biz/#/paths/pages-page_id--round_robin_users/post): Update the list of users assigned to the round robin system for message and comment handling.
+
+    **Call Logs**
+    - [GET /pages/{page_id}/sip_call_logs — Retrieve call logs](https://developer.pancake.biz/#/paths/pages-page_id--sip_call_logs/get): Retrieve the call history for a specific page.
+
+    **Page Customers**
+    - [GET /pages/{page_id}/page_customers — Get page customers information](https://developer.pancake.biz/#/paths/pages-page_id--page_customers/get): Retrieve customer profiles for the page, supporting lookup and customer management.
+    - [PUT /pages/{page_id}/page_customers/{page_customer_id} — Update page customer information](https://developer.pancake.biz/#/paths/pages-page_id--page_customers--page_customer_id/put): Update customer profiles for the page.
+    - [POST /pages/{page_id}/page_customers/{page_customer_id}/notes — Create page customer note](https://developer.pancake.biz/#/paths/pages-page_id--page_customers--page_customer_id--notes/post): Create a note for a customer.
+    - [PUT /pages/{page_id}/page_customers/{page_customer_id}/notes — Update page customer note](https://developer.pancake.biz/#/paths/pages-page_id--page_customers--page_customer_id--notes/put): Update a note for a customer.
+    - [DELETE /pages/{page_id}/page_customers/{page_customer_id}/notes — Delete page customer note](https://developer.pancake.biz/#/paths/pages-page_id--page_customers--page_customer_id--notes/delete): Delete a note for a customer.
+    - [GET /pages/{page_id}/avatar/{psid} — Get customer avatar](https://developer.pancake.biz/#/paths/pages-page_id--avatar--psid/get): Get the avatar image URL of a customer by `page_id` and `psid` (no authentication required).
+
+    ---
+
+    ### Step 3 — Get Messages
+
+    Once you have identified the target conversation, retrieve the full message history within it.
+
+    - [GET /pages/{page_id}/conversations/{conversation_id}/messages — Get messages](https://developer.pancake.biz/#/paths/pages-page_id--conversations--conversation_id--messages/get): Retrieve all messages in a specific conversation.
+    - [POST /pages/{page_id}/conversations/{conversation_id}/messages — Send message](https://developer.pancake.biz/#/paths/pages-page_id--conversations--conversation_id--messages/post): Send a message to a specific conversation.
+
+    ---
+
+    ### Step 4 — Media & Chat Plugin
+
+    **Upload Media**
+    - [POST /pages/{page_id}/upload_contents — Upload media content](https://developer.pancake.biz/#/paths/pages-page_id--upload_contents/post): Upload a file (image, video, document) to a page to obtain an attachment ID for use in messages.
+
+    **Chat Plugin**
+    - [POST /pke_chat_plugin/messages — Send message via Chat Plugin](https://developer.pancake.biz/#/paths/pke_chat_plugin-messages/post): Send a message or create a new conversation to a customer through Pancake Chat Plugin.
+    - [GET /pke_chat_plugin/messages — Get messages](https://developer.pancake.biz/#/paths/pke_chat_plugin-messages/get): Retrieve message history of a specific conversation in Pancake Chat Plugin. Supports pagination via offset.
+
+  contact:
+    name: Pancake Support
+    url: 'https://www.pancake.biz/contact'
+
+servers:
+  - url: 'https://pages.fm/api/v1'
+    description: User's API
+  - url: 'https://pages.fm/api/public_api/v1'
+    description: Page's API v1
+  - url: 'https://pages.fm/api/public_api/v2'
+    description: Page's API v2
+
+tags:
+  - name: Pages
+    description: Page management and access tokens
+  - name: Conversations
+    description: Customer conversations
+  - name: Messages
+    description: Operations related to chat messages
+  - name: Statistics
+    description: Advertising campaign and ad report statistics APIs
+  - name: Statistics - User
+    description: APIs related to user (staff) performance statistics across single or multiple pages
+
+paths:
+  /pages:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/v1'
+          description: User's API (default for list pages)
+      tags:
+        - Pages
+      summary: List pages
+      description: Get list pages for the authenticated account
+      security:
+        - UserAccessToken: []
+      parameters:
+        - name: access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Pancake user access token for authentication.
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Page'
+
+  /pages/{page_id}/generate_page_access_token:
+    post:
+      servers:
+        - url: 'https://pages.fm/api/v1'
+          description: User's API (default for list pages)
+      tags:
+        - Pages
+      summary: Generate page_access_token
+      description: "Generate or refresh page_access_token by the admin's access_token of page. Page Access Token used to authenticate public APIs on behalf of a Page. The page's admin can retrieve this token from the Pancake interface by going to: Page's settings → Tools. This token does not expire unless it is manually deleted or renewed. An API key is a token that you provide when making API calls. Include the token in a query parameter called page_access_token."
+      security:
+        - UserAccessToken: []
+      parameters:
+        - name: page_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: ID of the customer's page.
+        - name: access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Pancake user access token with admin rights to the page.
+      responses:
+        '200':
+          description: Token generated successfully
+
+  /pages/{page_id}/conversations:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v2'
+          description: Page's API v2
+      tags:
+        - Conversations
+      summary: Conversations
+      description: Get a list of the latest 60 conversations. Put the `last_conversation_id` parameter to get more conversations.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Access token of the page for authentication.
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique ID of the customer's page.
+        - name: last_conversation_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: "The `last_conversation_id` parameter represents the ID of a conversation. If this parameter is not provided, the system returns the 60 most recently updated conversations. If you provide the ID of the last conversation from the previous call, the system returns the next 60 older conversations."
+        - name: tags
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter conversations by tag IDs (comma-separated).
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+          description: Filter by conversation types (e.g. INBOX, COMMENT, COMMENT_LIVESTREAM, POST).
+        - name: post_ids
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+          description: Filter by post IDs (for comment-based conversations). Required to include `type:POST`
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Filter from a specific timestamp (in seconds).
+        - name: until
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Filter up to a specific timestamp (in seconds).
+        - name: unread_first
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: Prioritize unread conversations.
+        - name: order_by
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [inserted_at, updated_at]
+          description: Sort by insertion or update time.
+      responses:
+        '200':
+          description: List of conversations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Conversation'
+
+  /pages/{page_id}/conversations/{conversation_id}/tags:
+    post:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Conversations
+      summary: Conversation's tag
+      description: Add or remove a tag from a conversation
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique ID of the customer's page.
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique ID of the conversation to be updated.
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Access token of the page used for authentication.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - action
+                - tag_id
+              properties:
+                action:
+                  type: string
+                  enum: [add, remove]
+                  description: Action to perform (add or remove tag)
+                tag_id:
+                  type: string
+                  description: "ID of the tag to be added or removed. Retrieve the available tag IDs from the [Get list tags API](https://developer.pancake.biz/#/paths/pages-page_id--tags/get)."
+      responses:
+        '200':
+          description: Tags updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: integer
+                    description: List of tag IDs after update
+                  success:
+                    type: boolean
+                  timestamp:
+                    type: integer
+                    description: Operation timestamp
+  # Assign staff to a conversation
+  /pages/{page_id}/conversations/{conversation_id}/assign:
+    post:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Conversations
+      summary: Assign conversation
+      description: Assign one or more staff members to a specific conversation
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique ID of the customer's page.
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique ID of the conversation to assign staff to.
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Access token of the page used for authentication.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - assignee_ids
+              properties:
+                assignee_ids:
+                  type: array
+                  description: List of user IDs to assign to the conversation
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Conversation assigned successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  assignee_group_id:
+                    type: string
+                  assignee_ids:
+                    type: array
+                    items:
+                      type: string
+                  customers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        fb_id:
+                          type: string
+                        id:
+                          type: string
+                        name:
+                          type: string
+                  from:
+                    type: object
+                    properties:
+                      email:
+                        type: string
+                      id:
+                        type: string
+                      name:
+                        type: string
+                  seen:
+                    type: boolean
+                  updated_at:
+                    type: string
+                    format: date-time
+
+  # Mark a conversation as read
+  /pages/{page_id}/conversations/{conversation_id}/read:
+    post:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Conversations
+      summary: Mark conversation as read
+      description: Mark a conversation as read
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the customer's page
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the conversation
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token
+      responses:
+        '200':
+          description: Success response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  # Mark a conversation as unread
+  /pages/{page_id}/conversations/{conversation_id}/unread:
+    post:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Conversations
+      summary: Mark conversation as unread
+      description: Mark a conversation as unread
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the customer's page
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the conversation
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token
+      responses:
+        '200':
+          description: Success response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  # Retrieve message history from a conversation
+  /pages/{page_id}/conversations/{conversation_id}/messages:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Messages
+      summary: Get messages
+      description: Retrieve the list of messages in a conversation. Put the `current_count` parameter to get more messages.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: current_count
+          in: query
+          required: false
+          schema:
+            type: number
+          description: Index position to retrieve messages from. Returns 30 messages prior to this index.
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: "ID of the conversation to get messages from. Obtain it from the `id` field of the [Get conversations API](https://developer.pancake.biz/#/paths/pages-page_id--conversations/get)."
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: "ID of the page to retrieve data from. Obtain it from the `id` field of the [Get list pages API](https://developer.pancake.biz/#/paths/pages/get)."
+      responses:
+        '200':
+          description: List of messages together with the full customer and conversation context.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagesResponse'
+
+    post:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Messages
+      summary: Send a message (private reply, inbox, comment reply or whatsapp template message)
+      description: >
+        Send different types of messages to customers:
+
+        - **Inbox Message**: Send normal inbox message. Use **either** `message` **OR** `content_ids` (mutually exclusive).
+        
+        - **Reply Comment**: reply to a customer's comment        
+
+        - **Private Reply**: send a private reply from a customer's comment (only apply for some platforms like Facebook, Instagram). Send **either** one text message **or** one uploaded image (image is **Facebook only**, `content_ids` with a single item) — the two are mutually exclusive. See the `PrivateReply` schema.
+
+        - **Whatsapp Template Message**: send a whatsapp template message. (only apply for whatsapp business)
+
+        ⚠️ **IMPORTANT**: `message` and `content_ids` are **MUTUALLY EXCLUSIVE**. Do **NOT** send both simultaneously or API returns error.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of your page. You can take it from [the get list pages API](https://developer.pancake.biz/#/paths/pages/get)
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the conversation. You can take it from [the get conversations API](https://developer.pancake.biz/#/paths/pages-page_id--conversations/get)
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token (generate in tool settings)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/InboxMessage'
+                - $ref: '#/components/schemas/ReplyComment'
+                - $ref: '#/components/schemas/PrivateReply'
+                - $ref: '#/components/schemas/WhatsappTemplateMessage'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  id:
+                    type: string
+                  message:
+                    type: string
+
+
+#Statistic
+  /pages/{page_id}/statistics/pages_campaigns:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Statistics
+      summary: Ads campaign
+      description: Retrieve campaign-level statistics for a specific Facebook Page.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the page to retrieve data for.
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token (requires permission to view ad reports).
+        - name: since
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: Start time in Unix timestamp (UTC+0).
+        - name: until
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: End time in Unix timestamp (UTC+0).
+      responses:
+        '200':
+          description: Successful campaign stats response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    account_id:
+                      type: string
+                    ad_id:
+                      type: string
+                    adset_id:
+                      type: string
+                    budget_remaining:
+                      type: string
+                    currency:
+                      type: string
+                    daily_budget:
+                      type: string
+                    status:
+                      type: string
+
+  /pages/{page_id}/statistics/ads:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Statistics
+      summary: Ads
+      description: Retrieve ad-level statistics with options by time or by ID.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the page.
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token
+        - name: since
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: Start time (Unix timestamp)
+        - name: until
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: End time (Unix timestamp)
+        - name: type
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Type of aggregation, one of `by_id` or `by_time`
+      responses:
+        '200':
+          description: Successful ad stats response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    status:
+                      type: string
+                    currency:
+                      type: string
+                    reach:
+                      type: string
+                    impressions:
+                      type: string
+                    spend:
+                      type: string
+
+  /pages/{page_id}/ads:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Export Data
+      summary: Get ads by ad_id
+      description: >
+        Look up the details (name, image, campaign, ad account) of one or more ads by their
+        `ad_id`, for a specific page. Response shape is the same across ad platforms.
+
+
+        ⚠️ **You can only look up `ad_ids` that other Pancake APIs already return** — for
+        example:
+
+        - the `ad_ids` / `ads` fields of the
+          [Get conversations API](https://developer.pancake.biz/#/paths/pages-page_id--conversations/get),
+
+        - the `ad_clicks` field of the
+          [Export conversations from ads API](https://developer.pancake.biz/#/paths/pages-page_id--export_data/get),
+
+        - the `ad_id` field of the ad-statistics APIs
+          ([Ads](https://developer.pancake.biz/#/paths/pages-page_id--statistics-ads/get) and
+          [Ads campaign](https://developer.pancake.biz/#/paths/pages-page_id--statistics-pages_campaigns/get)).
+
+        This endpoint does **not** list a page's whole ad catalogue — it only resolves ads that
+        Pancake has already seen through customer activity.
+
+
+        **No data is returned for an ad that has no customers yet** — i.e. when no customer has
+        clicked the ad and messaged the page. Pancake only caches an ad's details once a customer
+        interaction has surfaced it. For such an `ad_id` (or any ad the page's token has no
+        permission to read), the entry is returned with **only its `id`** and none of the other
+        fields (this matches the `-` shown for the ad name in the Pancake UI).
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: "ID of the page the ads belong to. You can take it from [the get list pages API](https://developer.pancake.biz/#/paths/pages/get)."
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token.
+        - name: ad_ids
+          in: query
+          required: true
+          schema:
+            type: string
+          description: >
+            Comma-separated list of ad IDs to look up (e.g. `120200000000000001,120200000000000002`).
+            Values are trimmed and de-duplicated, keeping their order. **Maximum 20 unique
+            `ad_ids` per request.** Only `ad_ids` returned by other Pancake APIs can be resolved.
+          example: "120200000000000001,120200000000000002"
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ads, tt_ads]
+            default: ads
+          description: >
+            Ad platform to look up. `ads` (default, Facebook) or `tt_ads` (TikTok). If omitted,
+            Facebook (`ads`) is assumed.
+      responses:
+        '200':
+          description: Ad details. One entry per requested `ad_id`, in the same order as `ad_ids`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    description: >
+                      One item per requested `ad_id`. An ad the page can read returns the full
+                      object below. An ad with no cached details (no customer has messaged the
+                      page from it yet) or that the token cannot access returns only its `id`.
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          description: The ad ID (always present).
+                          example: "120200000000000001"
+                        name:
+                          type: string
+                          description: Ad name.
+                          example: "Summer Sale - Video 01"
+                        image_url:
+                          type: string
+                          nullable: true
+                          description: URL of the ad's creative image (from the attached post).
+                          example: "https://content.pancake.vn/xxxxx.jpg"
+                        campaign_id:
+                          type: string
+                          nullable: true
+                          description: ID of the campaign the ad belongs to.
+                          example: "120200000000000010"
+                        campaign_name:
+                          type: string
+                          nullable: true
+                          description: Name of the campaign the ad belongs to.
+                          example: "Summer Sale"
+                        account_id:
+                          type: string
+                          nullable: true
+                          description: Ad account ID (without the `act_` prefix).
+                          example: "1000000000000000"
+        '400':
+          description: >
+            Invalid request. Returned when `ad_ids` is missing/blank
+            (`ad_ids is required`) or when more than 20 unique ids are supplied
+            (`maximum 20 ad_ids per request`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  message:
+                    type: string
+                    example: "ad_ids is required"
+
+  /pages/{page_id}/statistics/customer_engagements:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Statistics
+      summary: Engagement
+      description: Retrieve engagement statistics for a given page by date range or hour.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the page to retrieve engagement statistics for.
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token (requires permission to view reports).
+        - name: date_range
+          in: query
+          required: true
+          schema:
+            type: string
+            example: "27/07/2021 00:00:00 - 26/08/2021 23:59:59"
+          description: >
+            Date range for the report, formatted as `DD/MM/YYYY HH:MM:SS - DD/MM/YYYY HH:MM:SS`.
+            The times are interpreted in the **page's local timezone** (e.g. UTC+7 for a Vietnam page),
+            not UTC+0.
+        - name: by_hour
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: Whether to return data aggregated by hour.
+        - name: user_ids
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Comma-separated list of staff user IDs to filter results. Refer to user list API.
+      responses:
+        '200':
+          description: Engagement statistics data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    description: Whether the request succeeded.
+                  data:
+                    type: object
+                    description: Time-series engagement data, ready to be plotted as a chart.
+                    properties:
+                      categories:
+                        type: array
+                        description: "Date labels for the X axis, one per data point (format `D/M/YYYY`, ordered newest first)."
+                        items:
+                          type: string
+                        example: ["6/7/2026", "5/7/2026", "4/7/2026"]
+                      series:
+                        type: array
+                        description: >
+                          One entry per metric. Each series' `data[]` array aligns index-by-index with `categories[]`
+                          (i.e. `data[i]` is the value on the date `categories[i]`). The metric is identified by `name`:
+
+                          - `inbox` — customer engagements via inbox messages
+
+                          - `comment` — customer engagements via comments
+
+                          - `total` — total engagements (inbox + comment)
+
+                          - `new_customer_replied` — new customers the page replied to
+
+                          - `customer_engagement_new_inbox` — customers who started a new inbox conversation
+
+                          - `order_count` — orders created
+
+                          - `old_order_count` — orders from returning (existing) customers
+                        items:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                              description: Metric name (see the list above).
+                              example: inbox
+                            data:
+                              type: array
+                              description: Metric value for each category, in the same order as `categories`.
+                              items:
+                                type: integer
+                              example: [1, 0, 0]
+                  users_engagements:
+                    type: array
+                    description: Per-staff engagement breakdown over the selected date range.
+                    items:
+                      type: object
+                      properties:
+                        user_id:
+                          type: string
+                          description: Pancake user UUID of the staff member.
+                          example: "00000000-0000-0000-0000-000000000000"
+                        name:
+                          type: string
+                          description: Display name of the staff member.
+                          example: "Neto Fullo"
+                        inbox_count:
+                          type: integer
+                          description: Number of inbox engagements handled by the staff member.
+                        order_count:
+                          type: integer
+                          description: Number of orders created by the staff member.
+                        old_order_count:
+                          type: integer
+                          description: Number of orders from returning customers handled by the staff member.
+                        total_engagement:
+                          type: integer
+                          description: Total engagements handled by the staff member.
+
+  /pages/{page_id}/statistics/customer_feedbacks:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Statistics
+      summary: Feedback
+      description: >
+        Retrieve customer feedback (satisfaction ratings) submitted for a page within a time range,
+        together with a per-staff average-rating breakdown. The time range is provided as Unix
+        timestamps via `since`/`until` and must span at most 1 month.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the page to retrieve customer feedback statistics for.
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token (requires permission to view reports).
+        - name: since
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: Start of the time range, as a Unix timestamp in seconds.
+        - name: until
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: >
+            End of the time range, as a Unix timestamp in seconds. The span between `since` and `until`
+            must be less than 1 month (2,592,000 seconds).
+      responses:
+        '200':
+          description: Customer feedback data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    description: Whether the request succeeded.
+                  customer_feedback:
+                    type: array
+                    description: Individual feedback entries within the selected range, newest first.
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          description: Unique ID of the feedback entry.
+                        admin_id:
+                          type: string
+                          description: Pancake user UUID of the staff member the feedback is about.
+                          example: "00000000-0000-0000-0000-000000000000"
+                        page_id:
+                          type: string
+                          description: ID of the page the feedback belongs to.
+                        conversation_id:
+                          type: string
+                          description: ID of the conversation the feedback was collected from.
+                        rate:
+                          type: integer
+                          description: Rating given by the customer (star rating, typically 1–5).
+                          example: 5
+                        message:
+                          type: string
+                          nullable: true
+                          description: Free-text feedback message left by the customer, if any.
+                        message_id:
+                          type: string
+                          nullable: true
+                          description: ID of the message that carries the feedback.
+                        sent_by_user:
+                          type: boolean
+                          description: >
+                            Whether the feedback request was sent manually by a staff member (`true`)
+                            or collected automatically by Botcake (`false`).
+                        feedback_name:
+                          type: string
+                          nullable: true
+                          description: Name/label of the feedback template used to collect the rating.
+                        employee_name:
+                          type: string
+                          description: Display name of the staff member the feedback is about; `Unknown` if not resolvable.
+                          example: "Neto Fullo"
+                        customer_name:
+                          type: string
+                          description: Display name of the customer who left the feedback; `Unknown` if not resolvable.
+                          example: "Customer 001"
+                        inserted_at:
+                          type: string
+                          format: date-time
+                          description: When the feedback was submitted, expressed in the page's timezone.
+                        page_name:
+                          type: string
+                          description: Name of the page.
+                        platform:
+                          type: string
+                          description: Platform of the page (e.g. `facebook`, `instagram`).
+                  customer_average_feedback:
+                    type: array
+                    description: >
+                      Per-staff summary of feedback over the selected range, sorted by average rating (highest first).
+                    items:
+                      type: object
+                      properties:
+                        admin_id:
+                          type: string
+                          description: Pancake user UUID of the staff member.
+                          example: "00000000-0000-0000-0000-000000000000"
+                        feedback_count:
+                          type: integer
+                          description: Total number of feedback entries received by the staff member.
+                        avg_feedback:
+                          type: number
+                          description: Average rating across the staff member's feedback entries.
+                          example: 4.5
+                        botcake_count:
+                          type: integer
+                          description: Number of feedback entries collected automatically by Botcake (`sent_by_user` is `false`).
+                        employee_name:
+                          type: string
+                          description: Display name of the staff member.
+                          example: "Neto Fullo"
+
+  /pages/{page_id}/statistics/pages:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Statistics
+      summary: Page
+      description: Retrieve general page statistics over time.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the page
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token (requires permission)
+        - name: since
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: Start time in Unix timestamp (UTC+0)
+        - name: until
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: End time in Unix timestamp (UTC+0)
+      responses:
+        '200':
+          description: Page statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        customer_comment_count:
+                          type: integer
+                        customer_inbox_count:
+                          type: integer
+                        hour:
+                          type: string
+                          format: date-time
+                        inbox_interactive_count:
+                          type: integer
+                        new_customer_count:
+                          type: integer
+                        new_inbox_count:
+                          type: integer
+                        page_comment_count:
+                          type: integer
+                        page_inbox_count:
+                          type: integer
+                        phone_number_count:
+                          type: integer
+                        today_uniq_website_referral:
+                          type: integer
+                        today_website_guest_referral:
+                          type: integer
+                        uniq_phone_number_count:
+                          type: integer
+
+  /pages/{page_id}/statistics/tags:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Statistics
+      summary: Tag
+      description: Retrieve tag usage statistics over a specified time range.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the page
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token
+        - name: since
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: Start time (Unix timestamp, UTC+0)
+        - name: until
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: End time (Unix timestamp, UTC+0)
+      responses:
+        '200':
+          description: Tag statistics by time range and today summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      categories:
+                        type: array
+                        items:
+                          type: string
+                      series:
+                        type: object
+                        additionalProperties:
+                          type: array
+                          items:
+                            type: integer
+                  data_today:
+                    type: object
+                    properties:
+                      categories:
+                        type: array
+                        items:
+                          type: string
+                      series:
+                        type: object
+                        additionalProperties:
+                          type: array
+                          items:
+                            type: integer
+                  tags:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        text:
+                          type: string
+                        color:
+                          type: string
+                        lighten_color:
+                          type: string
+                        description:
+                          type: string
+                          nullable: true
+
+  /pages/{page_id}/statistics/users:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Statistics
+      summary: User
+      description: >
+        Retrieve detailed interaction statistics for users (staff) of a specific page within a given date range.
+        Includes message count, comment count, average response time, and more.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the page to retrieve statistics for.
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Access token for the page (generated in the page's tool settings).
+        - name: date_range
+          in: query
+          required: true
+          schema:
+            type: string
+            example: "27/07/2021 00:00:00 - 26/08/2021 23:59:59"
+          description: >
+            Date range for statistics collection, formatted as `DD/MM/YYYY HH:MM:SS - DD/MM/YYYY HH:MM:SS`.
+            The times are interpreted in the **page's local timezone** (e.g. UTC+7 for a Vietnam page),
+            not UTC+0.
+      responses:
+        '200':
+          description: Successful response with user statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      statistics:
+                        type: object
+                        additionalProperties:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              average_response_time:
+                                type: integer
+                                description: Average response time in milliseconds
+                                example: 74276
+                              comment_count:
+                                type: integer
+                                description: Total comment count handled
+                                example: 0
+                              inbox_count:
+                                type: integer
+                                description: Total inbox messages handled
+                                example: 6
+                              phone_number_count:
+                                type: integer
+                                description: Phone numbers collected
+                                example: 0
+                              private_reply_count:
+                                type: integer
+                                description: Number of private replies sent from comments
+                                example: 0
+                              unique_comment_count:
+                                type: integer
+                                description: Number of unique customer comments responded to
+                                example: 0
+                              unique_inbox_count:
+                                type: integer
+                                description: Number of unique inbox conversations responded to
+                                example: 2
+                              hour:
+                                type: string
+                                format: date-time
+                                description: Time bucket for statistics
+                                example: "2021-07-28T10:00:00"
+                      users:
+                        type: object
+                        additionalProperties:
+                          type: object
+                          properties:
+                            user_name:
+                              type: string
+                              example: "Quyết Nguyễn"
+                            user_fb_id:
+                              type: string
+                              example: "570423649807405"
+                            average_response_time:
+                              type: integer
+                              example: 588569
+                            comment_count:
+                              type: integer
+                              example: 0
+                            inbox_count:
+                              type: integer
+                              example: 637
+                            phone_number_count:
+                              type: integer
+                              example: 0
+                            private_reply_count:
+                              type: integer
+                              example: 0
+                            unique_comment_count:
+                              type: integer
+                              example: 0
+                            unique_inbox_count:
+                              type: integer
+                              example: 30
+                            hour:
+                              type: string
+                              format: date-time
+                              example: "2021-08-26T13:00:00"
+
+  /pages/{page_id}/statistics/page_customers:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Statistics
+      summary: New customer
+      description: >
+        Retrieve statistics for new customers over a specified period of time. 
+        You can group data by day (default), hour, or page ID.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the page to retrieve customer statistics for.
+        - name: group_by
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [day, hour, page_id]
+            default: day
+          description: >
+            Grouping method for the data:
+            - `day`: Returns data grouped by day (default).
+            - `hour`: Returns data grouped by hour.
+            - `page_id`: Returns data grouped by page ID.
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Access token for the page (retrievable from page settings).
+        - name: date_range
+          in: query
+          required: true
+          schema:
+            type: string
+            example: "20/07/2020 - 20/08/2020"
+          description: >
+            The date range for which to retrieve statistics, formatted as `DD/MM/YYYY - DD/MM/YYYY`
+            (or `DD/MM/YYYY HH:MM:SS - DD/MM/YYYY HH:MM:SS`). The dates are interpreted in the
+            **page's local timezone** (e.g. UTC+7 for a Vietnam page), not UTC+0.
+      responses:
+        '200':
+          description: Successful response with new customer statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - type: array
+                        description: Statistics grouped by day or hour
+                        items:
+                          type: object
+                          properties:
+                            date:
+                              type: string
+                              description: Date or hour of the statistics
+                              example: "2020-08-12T16:00:00"
+                            new_customer_count:
+                              type: integer
+                              description: Number of new customers
+                              example: 4
+                            new_page_inbox_count:
+                              type: integer
+                              description: Number of new inbox conversations
+                              example: 3
+                            new_phone_number_count:
+                              type: integer
+                              description: Number of new phone numbers collected
+                              example: 0
+                            phone_number_count:
+                              type: integer
+                              description: Total phone numbers
+                              example: 0
+                      - type: object
+                        description: Statistics grouped by page ID
+                        additionalProperties:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              date:
+                                type: string
+                                description: Date of the statistics
+                                example: "2020-08-12"
+                              new_customer_count:
+                                type: integer
+                                example: 0
+                              new_page_inbox_count:
+                                type: integer
+                                example: 1
+                              new_phone_number_count:
+                                type: integer
+                                example: 0
+                              phone_number_count:
+                                type: integer
+                                example: 0
+                  success:
+                    type: boolean
+                    example: true
+              
+  /pages/{page_id}/export_data:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Export Data
+      summary: Export conversations from ads
+      description: >
+        Export conversations coming from ads within a specified time range. 
+        Each request returns up to 60 conversations starting from the given offset.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the customer page.
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Access token of the page (retrievable from page settings).
+        - name: since
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            example: 1672531200
+          description: Start time in UNIX timestamp (UTC+0).
+        - name: until
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            example: 1675219599
+          description: End time in UNIX timestamp (UTC+0).
+        - name: action
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [conversations_from_ads]
+          description: Action type, must be `conversations_from_ads`.
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+          description: >
+            Offset for pagination. Default is 0. Each call returns up to 60 records.
+      responses:
+        '200':
+          description: Successfully exported conversations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    description: List of conversations
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          description: Conversation ID
+                        tags:
+                          type: array
+                          items:
+                            type: string
+                        from:
+                          type: object
+                          properties:
+                            email:
+                              type: string
+                              example: "user@example.com"
+                            id:
+                              type: string
+                              description: Facebook user ID
+                            name:
+                              type: string
+                              description: Name of the user
+                        inserted_at:
+                          type: string
+                          format: date-time
+                        updated_at:
+                          type: string
+                          format: date-time
+                        customers:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              fb_id:
+                                type: string
+                              id:
+                                type: string
+                              name:
+                                type: string
+                        recent_phone_numbers:
+                          type: array
+                          items:
+                            type: string
+                        recent_seen_users:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              fb_id:
+                                type: string
+                              fb_name:
+                                type: string
+                              seen_at:
+                                type: string
+                                format: date-time
+                        thread_key:
+                          type: string
+                        psid:
+                          type: string
+                        ad_clicks:
+                          type: array
+                          items:
+                            type: string
+                        is_banned:
+                          type: boolean
+                        assignees:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                              name:
+                                type: string
+                  success:
+                    type: boolean
+                    example: true
+
+  /pages/{page_id}/page_customers:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Customers
+      summary: Get page customers information
+      description: >
+        Retrieve customer information for a specific page within a time range. Supports pagination and sorting options.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The ID of the customer page.
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The access token of the page (can be created in the page settings).
+        - name: since
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: Start time in UNIX timestamp (UTC+0).
+        - name: until
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: End time in UNIX timestamp (UTC+0).
+        - name: page_number
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+          description: "Current page number (minimum value: 1)."
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            maximum: 100
+          description: The size of each page (maximum 100).
+        - name: order_by
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [inserted_at, updated_at]
+            default: inserted_at
+          description: "Sort order in descending order. Options: `inserted_at` (creation time), `updated_at` (last updated time)."
+      responses:
+        '200':
+          description: Successfully retrieved customers information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                    description: Total number of customers
+                    example: 500
+                  customers:
+                    type: array
+                    description: List of customers
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          description: Page-customer ID (unique within the page).
+                        customer_id:
+                          type: string
+                          description: Global customer ID linking this contact across pages.
+                        name:
+                          type: string
+                          description: Customer's name
+                        psid:
+                          type: string
+                          description: Page-scoped user ID
+                        thread_id:
+                          type: string
+                          nullable: true
+                          description: ID of the customer's conversation thread with the page.
+                        birthday:
+                          type: string
+                          format: date
+                          nullable: true
+                          description: "Customer's birthday as a `YYYY-MM-DD` string (unknown parts are `00`, e.g. `1998-00-00`). `null` if unknown."
+                        gender:
+                          type: string
+                          nullable: true
+                          description: Customer's gender
+                        lives_in:
+                          type: string
+                          nullable: true
+                          description: Customer's location
+                        can_inbox:
+                          type: boolean
+                          description: Whether the page can currently send the customer an inbox message (inside the messaging window).
+                        emails:
+                          type: array
+                          nullable: true
+                          description: Email addresses on file for the customer.
+                          items:
+                            type: string
+                        phone_numbers:
+                          type: array
+                          items:
+                            type: string
+                          description: List of phone numbers
+                        inserted_at:
+                          type: string
+                          format: date-time
+                          description: Creation time of the customer record
+                        updated_at:
+                          type: string
+                          format: date-time
+                          description: Time the customer record was last updated.
+                        recent_orders:
+                          type: array
+                          nullable: true
+                          description: Customer's most recent orders. `null` when none are returned.
+                          items:
+                            type: object
+                        notes:
+                          type: array
+                          description: Customer notes
+                          items:
+                            type: object
+                            properties:
+                              created_at:
+                                type: integer
+                                format: int64
+                                description: Creation time in UNIX timestamp (milliseconds)
+                              created_by:
+                                type: object
+                                description: Information about the user who created the note
+                                properties:
+                                  fb_id:
+                                    type: string
+                                    description: Facebook ID
+                                  fb_name:
+                                    type: string
+                                    description: Facebook name
+                                  uid:
+                                    type: string
+                                    description: System user ID
+                              edit_history:
+                                type: array
+                                description: History of edits
+                                items:
+                                  type: object
+                              id:
+                                type: string
+                                description: Note ID
+                              images:
+                                type: array
+                                description: List of images attached to the note
+                                items:
+                                  type: string
+                              links:
+                                type: array
+                                description: List of links attached to the note
+                                items:
+                                  type: string
+                              message:
+                                type: string
+                                description: Content of the note
+                              order_id:
+                                type: string
+                                description: Related order ID
+                              removed_at:
+                                type: integer
+                                format: int64
+                                nullable: true
+                                description: Time the note was removed (if applicable)
+                              updated_at:
+                                type: integer
+                                format: int64
+                                nullable: true
+                                description: Time the note was last updated (if applicable)
+                  success:
+                    type: boolean
+                    example: true
+
+  /pages/{page_id}/page_customers/{page_customer_id}:
+    put:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Customers
+      summary: Update customer information
+      description: >
+        Update details of a specific customer on a page.  
+        The customer ID can be obtained from the **Page customers** API.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The ID of the page.
+        - name: page_customer_id
+          in: path
+          required: true
+          schema:
+            type: UUID
+          description: The ID of the customer to update.
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The page access token (can be created in the page settings or retrieved from the List Pages API).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                changes:
+                  type: object
+                  description: Fields to update for the customer
+                  properties:
+                    gender:
+                      type: string
+                      enum: [male, female, unknown]
+                      description: The customer's gender
+                    birthday:
+                      type: string
+                      format: date
+                      description: The customer's birthday in format YYYY-MM-DD
+                    phone_numbers:
+                      type: array
+                      description: List of phone numbers
+                      items:
+                        type: string
+                    name:
+                      type: string
+                      description: The customer's name
+      responses:
+        '200':
+          description: Successfully updated the customer information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+
+  /pages/{page_id}/avatar/{psid}:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/v1'
+          description: User's API
+      tags:
+        - Customers
+      summary: Get customer avatar
+      description: >
+        Retrieve the avatar image of a customer by `page_id` and `psid`.
+        This endpoint is public and does not require authentication.
+        It responds with a `301 Moved Permanently` redirect to the actual
+        avatar image hosted on Pancake's CDN, so it can be used directly as
+        the `src` of an `<img>` tag.
+
+
+        **Example URL:** `https://pancake.vn/api/v1/pages/256469571178082/avatar/1494977527279229`
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the page that the customer belongs to.
+          example: "256469571178082"
+        - name: psid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: >
+            The customer's `psid` (page-scoped ID). It can be retrieved from:
+
+            - [GET /pages/{page_id}/page_customers — Get page customers](https://developer.pancake.biz/#/paths/pages-page_id--page_customers/get): the `psid` field on each customer.
+
+            - [GET /pages/{page_id}/conversations — Get conversations](https://developer.pancake.biz/#/paths/pages-page_id--conversations/get): the `from.id` field of each conversation.
+          example: "1494977527279229"
+      responses:
+        '301':
+          description: Redirect to the actual avatar image URL on Pancake's CDN.
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+                example: "https://content.pancake.vn/2.1-24/avatars/aba903211178ae550e4651c4daef12ae01397de8"
+              description: URL of the customer's avatar image.
+
+  /pages/{page_id}/page_customers/{page_customer_id}/notes:
+    post:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Customers
+      summary: Add a new customer note
+      description: Add a new text note for a specific customer.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the page
+        - name: page_customer_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the customer (can be retrieved from API Page customers)
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token (can be created in the page settings)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                  description: Note content (currently supports text only)
+                  example: "This customer prefers afternoon calls."
+      responses:
+        '200':
+          description: Successfully added a note
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+
+    put:
+      tags:
+        - Customers
+      summary: Update a customer note
+      description: Update an existing note for a specific customer.
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the page
+        - name: page_customer_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the customer (can be retrieved from API Page customers)
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token (can be created in the page settings)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note_id:
+                  type: string
+                  description: ID of the note to update
+                message:
+                  type: string
+                  description: Updated note content (currently supports text only)
+                  example: "Updated note: prefers email communication."
+      responses:
+        '200':
+          description: Successfully updated the note
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+
+    delete:
+      tags:
+        - Customers
+      summary: Delete a customer note
+      description: Delete an existing note for a specific customer.
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the page
+        - name: page_customer_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the customer (can be retrieved from API Page customers)
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token (can be created in the page settings)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note_id:
+                  type: string
+                  description: ID of the note to delete
+      responses:
+        '200':
+          description: Successfully deleted the note
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+
+
+
+  /pages/{page_id}/sip_call_logs:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Call logs
+      summary: Retrieve call logs
+      description: >
+        Get the list of call history for a specific page.  
+        Requires the page ID and access token.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The ID of the page.
+        - name: id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The ID of the SIP package.
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The page access token (can be created in the page settings).
+        - name: page_number
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+          description: Current page number (minimum is 1).
+        - name: page_size
+          in: query
+          required: true
+          schema:
+            type: integer
+            maximum: 30
+          description: Number of records per page (maximum is 30).
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+          description: Start time (in Unix timestamp, seconds, UTC+0).
+        - name: until
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+          description: End time (in Unix timestamp, seconds, UTC+0).
+      responses:
+        '200':
+          description: Successfully retrieved call logs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        call_id:
+                          type: string
+                          description: The unique identifier for the call
+                        caller:
+                          type: string
+                          description: The caller's phone number
+                        callee:
+                          type: string
+                          description: The callee's phone number
+                        start_time:
+                          type: string
+                          format: date-time
+                          description: Start time of the call
+                        duration:
+                          type: integer
+                          description: Duration of the call in seconds
+                        status:
+                          type: string
+                          description: Call status (e.g., completed, missed)
+                  success:
+                    type: boolean
+                    example: true
+
+  /pages/{page_id}/tags:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Tags
+      summary: Get list tags
+      description: Retrieve a list of tags for a specific page.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the customer’s page
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token (can be created in the page settings)
+      responses:
+        '200':
+          description: Successfully retrieved tags
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tags:
+                    type: array
+                    description: List of tags for the page
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          description: Unique ID of the tag
+                          example: 0
+                        text:
+                          type: string
+                          description: Name of the tag
+                          example: "Kiểm hàng"
+                        color:
+                          type: string
+                          description: Main color code of the tag
+                          example: "#4b5577"
+                        lighten_color:
+                          type: string
+                          description: Lightened color version
+                          example: "#c9ccd6"
+
+  /pages/{page_id}/posts:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Posts
+      summary: Get posts
+      description: Retrieve a list of posts for a specific page.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the customer’s page
+        - name: since
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: Start time (Unix timestamp in seconds UTC+0)
+        - name: until
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: End time (Unix timestamp in seconds UTC+0)
+        - name: page_number
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: Current page number (minimum 1)
+        - name: page_size
+          in: query
+          required: true
+          schema:
+            type: integer
+          description: Page size (maximum 30)
+        - name: page_access_token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Page access token (can be created in the page settings)
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [video, photo, text, livestream]
+          description: Filter posts by type
+      responses:
+        '200':
+          description: Successfully retrieved posts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  total:
+                    type: integer
+                    description: Total number of posts
+                    example: 200
+                  posts:
+                    type: array
+                    description: List of posts
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          description: Unique ID of the post
+                          example: "256469571178082_1719461745119729"
+                        page_id:
+                          type: string
+                          description: ID of the page
+                          example: "256469571178082"
+                        from:
+                          type: object
+                          description: Post creator
+                          properties:
+                            id:
+                              type: string
+                              example: "5460527857372996"
+                            name:
+                              type: string
+                              example: "Djamel Belkessa"
+                        message:
+                          type: string
+                          description: Post content
+                          example: "edit review là 1 nghệ thuật"
+                        type:
+                          type: string
+                          description: Post type
+                          example: "rating"
+                        inserted_at:
+                          type: string
+                          format: date-time
+                          description: Post creation timestamp
+                          example: "2022-08-22T03:09:27"
+                        comment_count:
+                          type: integer
+                          description: Number of comments
+                          example: 0
+                        reactions:
+                          type: object
+                          description: Post reactions
+                          properties:
+                            angry_count:
+                              type: integer
+                              description: Number of angry
+                              example: 1
+                            care_count: 
+                              type: integer
+                              description: Number of care
+                              example: 2
+                            haha_count:
+                              type: integer
+                              description: Number of haha
+                              example: 1
+                            like_count: 
+                              type: integer
+                              description: Number of like
+                              example: 111
+                            love_count: 
+                              type: integer
+                              description: Number of love
+                              example: 14
+                            sad_count:
+                              type: integer
+                              description: Number of sad
+                              example: 12
+                            wow_count: 
+                              type: integer
+                              description: Number of wow
+                              example: 17
+                        phone_number_count:
+                          type: integer
+                          description: Number of phone numbers in post
+                          example: 0
+
+#Users
+  /pages/{page_id}/users:
+    get:
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      tags:
+        - Users
+      summary: Get list of users
+      description: Retrieve the list of users for a specific page.
+      security:
+        - PageAccessToken: []
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the customer’s page
+        - name: page_access_token
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Page access token (can be created in the page settings)
+      responses:
+        '200':
+          description: Successfully retrieved user list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  users:
+                    type: array
+                    description: Active users of the page
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          description: User UUID
+                          example: "c4bafd84-7b96-4f28-b59a-031f17c32ddf"
+                        name:
+                          type: string
+                          description: User name
+                          example: "Anh Ngoc Nguyen"
+                        status:
+                          type: string
+                          description: User availability status
+                          example: "available"
+                        fb_id:
+                          type: string
+                          description: Facebook ID of the user
+                          example: "116256249766099"
+                        page_permissions:
+                          type: object
+                          nullable: true
+                          properties:
+                            permissions:
+                              type: array
+                              items:
+                                type: integer
+                              example: [100, 71, 81]
+                        status_in_page:
+                          type: string
+                          description: User’s status in the page
+                          example: "active"
+                        is_online:
+                          type: boolean
+                          description: Whether user is online
+                          example: false
+                  disabled_users:
+                    type: array
+                    description: List of disabled users
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          description: User UUID
+                          example: "69586d78-dd37-4d25-ad2b-0716697b1c34"
+                        name:
+                          type: string
+                          description: User name
+                          example: "Khanh khanh"
+                        fb_id:
+                          type: string
+                          description: Facebook ID of the user
+                          example: "1736243166628197"
+                  round_robin_users:
+                    type: object
+                    description: Users assigned for round robin
+                    properties:
+                      comment:
+                        type: array
+                        items:
+                          type: string
+                          description: User UUIDs for comments
+                        example: ["79d4e769-ac31-4821-8304-d6e251d532e9"]
+                      inbox:
+                        type: array
+                        items:
+                          type: string
+                          description: User UUIDs for inbox
+                        example: ["fb5ff8ed-434b-4d4b-a213-b595b242b81a"]
+
+  /pages/{page_id}/round_robin_users:
+    post:
+      tags:
+        - Users
+      summary: Update round robin users
+      description: |
+        Update the list of users assigned to the round robin system for message and comment handling.  
+        To get the current list of selected users, use the `GET /pages/{page_id}/users` API, which returns the field `round_robin_users`.
+      security:
+        - PageAccessToken: []
+      servers:
+        - url: 'https://pages.fm/api/public_api/v1'
+          description: Page's API v1
+      parameters:
+        - name: page_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: ID of the customer’s page
+        - name: page_access_token
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Page access token (can be created in the page settings)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inbox:
+                  type: array
+                  description: List of user IDs selected for message assignments
+                  items:
+                    type: string
+                  example: ["79d4e769-ac31-4821-8304-d6e251d532e9", "fb5ff8ed-434b-4d4b-a213-b595b242b81a"]
+                comment:
+                  type: array
+                  description: List of user IDs selected for comment assignments
+                  items:
+                    type: string
+                  example: ["79d4e769-ac31-4821-8304-d6e251d532e9"]
+      responses:
+        '200':
+          description: Successfully updated round robin users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Cài đặt đã được cập nhật thành công"
+                  success:
+                    type: boolean
+                    example: true
+
+#Page content
+  /pages/{page_id}/upload_contents:
+      post:
+        summary: Upload media content
+        tags:
+          - Page's Contents
+        description: >
+          This endpoint allows uploading a file (e.g., image, video) to a Page.<br>
+          The request must include a valid `page_access_token` in the query string.<br>
+
+
+          Video size limit:<br>
+            `Shopee`: maximum 30MB<br>
+            `Whatsapp Official`: maximum 16MB<br>
+            `Lazada`: maximum 100MB<br>
+            `Other`: maximum 15MB
+
+        security:
+          - PageAccessToken: []
+        servers:
+          - url: 'https://pages.fm/api/public_api/v1'
+            description: Page's API v1
+        parameters:
+          - name: page_id
+            in: path
+            required: true
+            description: ID of the Page to upload the content to.
+            schema:
+              type: string
+          - name: page_access_token
+            in: query
+            required: true
+            description: Page Access Token obtained from **Settings → Tools**.
+            schema:
+              type: string
+        requestBody:
+          required: true
+          content:
+            multipart/form-data:
+              schema:
+                type: object
+                properties:
+                  file:
+                    type: string
+                    format: binary
+                    description: The file to upload.
+        responses:
+          '200':
+            description: Successful upload
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      example: HXrxioWFIc5DFwffhmOVHspLuMwpWCXfWDoBxiov6DLa3MvakLeGpLQAly7oHDvZT66VEhnYG4zQEi2MhEzhlg
+                    attachment_type:
+                      description: Supported attachment types (PHOTO, VIDEO, DOCUMENT, AUDIO_ATTACHMENT_ID).
+                      type: string
+                      example: 'PHOTO'
+                    success:
+                      type: boolean
+                      example: true
+#Chat-plugin
+  /pke_chat_plugin/messages:
+    post:
+      tags:
+        - Chat Plugin
+      servers:
+        - url: 'https://pages.fm/api/v1'
+      summary: Send message or create a new conversation
+      description: |
+        Send a message or create a new conversation to a customer through Pancake Chat Plugin.
+        Supports text messages and attachments (e.g. images).
+      parameters:
+        - name: page_id
+          in: query
+          required: true
+          description: Page ID of the chat plugin
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - from_id
+                - dummy_id
+                - inserted_at
+              properties:
+                message:
+                  type: string
+                  description: Text message content
+                  example: Hello! How can I help you?
+                dummy_id:
+                  type: number
+                  description: Client-side unique ID for tracking the message
+                  example: 1765875902892
+                extra_info:
+                  type: object
+                  description: Additional metadata
+                  example: {}
+                name:
+                  type: string
+                  description: Sender display name
+                  example: Web_1619912441
+                conversation_id:
+                  type: string
+                  description: Conversation ID. To create a new conversation you need set conversation_id is `null` 
+                  example: web_1664524051101747_web_xxxxxxxxx
+                from_id:
+                  type: string
+                  description: Sender ID
+                  example: web_xxxxxxxxx
+                replied_message_id:
+                  type: string
+                  nullable: true
+                  description: ID of the message being replied to
+                  example: null
+                inserted_at:
+                  type: number
+                  description: Client timestamp in milliseconds
+                  example: 1765875902892
+                attachments:
+                  type: array
+                  description: >
+                    List of media attachments (e.g. images) to send with the message. Each item references a
+                    file already uploaded via the
+                    [content upload API](https://developer.pancake.biz/#/paths/pages-page_id--upload_contents/post):
+                    you send its `content_id` and Pancake resolves the file URL, MIME type and image dimensions
+                    server-side. An item without a valid `content_id` is ignored.
+                  items:
+                    type: object
+                    required:
+                      - content_id
+                    properties:
+                      content_id:
+                        type: string
+                        description: >
+                          ID of an uploaded content item, returned as `id` by the
+                          [content upload API](https://developer.pancake.biz/#/paths/pages-page_id--upload_contents/post).
+                          Pancake uses it to resolve the attachment's URL, MIME type and dimensions; an item
+                          without a valid `content_id` is dropped.
+                        example: HXrxioWFIc5DFwffhmOVHspLuMwpWCXfWDoBxiov6DLa3MvakLeGpLQAly7oHDvZT66VEhnYG4zQEi2MhEzhlg
+                      id:
+                        type: string
+                        description: >
+                          Optional client-side identifier used only to correlate this attachment with the
+                          response on the client (similar to `dummy_id` for the message). It is not used by
+                          the server to resolve the file — the attachment's URL, MIME type and dimensions
+                          always come from `content_id` — and it is not persisted. Any client-unique string works.
+                        example: att_xxxxxxxxx
+      responses:
+        "200":
+          description: Message sent successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    description: Message ID
+                    example: web_1664524051101747_xxxxxxxxx
+                  success:
+                    type: boolean
+                    example: true
+                  conversation_id:
+                    type: string
+                    example: web_1664524051101747_web_xxxxxxxxx
+                  from_id:
+                    type: string
+                    example: web_xxxxxxxxx
+                  dummy_id:
+                    type: number
+                    example: 1765875902892  
+
+    get:
+      tags:
+        - Chat Plugin
+      servers:
+        - url: 'https://pages.fm/api/v1'
+      summary: Get messages of a conversation
+      description: |
+        Retrieve message history of a specific conversation in Pancake Chat Plugin.
+        Supports pagination via offset.
+      parameters:
+        - name: conversation_id
+          in: query
+          required: true
+          description: Conversation ID to fetch messages
+          schema:
+            type: string
+            example: web_1664524051101747_web_xxxxxxxxx
+        - name: page_id
+          in: query
+          required: true
+          description: Page ID of the chat plugin
+          schema:
+            type: string
+            example: web_1664524051101747
+        - name: offset
+          in: query
+          required: false
+          description: Offset for pagination
+          schema:
+            type: integer
+            example: 0
+      responses:
+        "200":
+          description: Messages retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messages:
+                    type: array
+                    description: List of messages in the conversation
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          example: web_1664524051101747_xxxxxxxxx
+                        message:
+                          type: string
+                          description: Message content (HTML format)
+                          example: "<div>Hello</div>"
+                        original_message:
+                          type: string
+                          description: Plain text message content
+                          example: Hello
+                        type:
+                          type: string
+                          description: Message type
+                          example: INBOX
+                        seen:
+                          type: boolean
+                          example: true
+                        show_info:
+                          type: boolean
+                          example: true
+                        from:
+                          type: object
+                          description: Sender information
+                          properties:
+                            id:
+                              type: string
+                              example: web_1664524051101747
+                            name:
+                              type: string
+                              example: Pancake Team
+                            admin_id:
+                              type: string
+                              nullable: true
+                              example: web_1664524051101747
+                            admin_name:
+                              type: string
+                              nullable: true
+                              example: BotcakeAI
+                        inserted_at:
+                          type: string
+                          format: date-time
+                          example: "2025-12-13T04:59:23.856000"
+                        page_id:
+                          type: string
+                          example: web_1664524051101747
+                        conversation_id:
+                          type: string
+                          example: web_1664524051101747_web_xxxxxxxxx
+                        attachments:
+                          type: array
+                          description: Attachments associated with the message
+                          items:
+                            type: object
+                            properties:
+                              type:
+                                type: string
+                                example: link
+                              title:
+                                type: string
+                                example: Phụ kiện thời trang 07 | Webcake
+                              description:
+                                type: string
+                                example: Phụ kiện thời trang 07 | Webcake
+                              link:
+                                type: string
+                                format: uri
+                                example: https://netfull.online/
+                              image:
+                                type: object
+                                properties:
+                                  url:
+                                    type: string
+                                    format: uri
+                                    example: https://content.pancake.vn/xxx.png
+                              is_web_source:
+                                type: boolean
+                                example: true
+                        has_phone:
+                          type: boolean
+                          example: false
+                        is_removed:
+                          type: boolean
+                          example: false
+                        is_hidden:
+                          type: boolean
+                          example: false
+                        message_tags:
+                          type: array
+                          items:
+                            type: string
+                        user_likes:
+                          type: boolean
+                          example: false
+                  can_request_feedback:
+                    type: boolean
+                    description: Indicates whether feedback can be requested
+                    example: true
+components:
+  securitySchemes:
+    UserAccessToken:
+      type: apiKey
+      name: access_token
+      in: query
+      description: >
+        User Access Token uniquely identifies an individual user.
+
+        You can find this token in Pancake under: **Account → Personal Settings**.
+
+        This token is valid for up to 90 days or until the user logs out.
+        
+        ![How to get User access token?](https://statics.pancake.vn/pancake-docs/2025/3/20/Screenshot%202025-03-20%20at%2014.20.51.png)
+
+    PageAccessToken:
+      type: apiKey
+      name: page_access_token
+      in: query
+      description: >
+        Page Access Token used to authenticate public APIs on behalf of a Page.
+
+        The page's administer can retrieve this token from the Pancake interface by going to:
+        **Settings → Tools** or call the Generate page_access_token API.
+
+        This token does not expire unless it is manually deleted or renewed.
+
+        ![How to get Page access token?](https://statics.pancake.vn/pancake-docs/2025/3/20/Screenshot%202025-03-20%20at%2014.30.53.png)
+
+  schemas:
+    Page:
+      type: object
+      properties:
+        id:
+          type: string
+        platform:
+          type: string
+        name:
+          type: string
+        avatar_url:
+          type: string
+          format: uri
+
+    Conversation:
+      type: object
+      description: A single conversation (inbox thread, comment thread, or livestream thread) on a page.
+      properties:
+        id:
+          type: string
+          description: "Unique ID of the conversation. For comments it has the form `{post_fbid}_{comment_fbid}`; for inbox threads it is the customer's PSID."
+        type:
+          type: string
+          enum: [INBOX, COMMENT, LIVESTREAM]
+          description: "Conversation channel. `INBOX` = private message thread, `COMMENT` = comment under a post, `LIVESTREAM` = comment during a livestream."
+        page_id:
+          type: string
+          description: ID of the page that owns this conversation.
+        post_id:
+          type: string
+          nullable: true
+          description: "ID of the post the conversation belongs to (only for `COMMENT`/`LIVESTREAM` types). `null` for inbox threads."
+        snippet:
+          type: string
+          nullable: true
+          description: Short text preview of the most recent message in the conversation. May be `null` when the last message has no text (e.g. an image-only message).
+        seen:
+          type: boolean
+          description: Whether the conversation has been marked as read.
+        message_count:
+          type: integer
+          description: Total number of messages exchanged in the conversation.
+        has_phone:
+          type: boolean
+          description: Whether a phone number has been detected/collected from the customer in this conversation.
+        inserted_at:
+          type: string
+          format: date-time
+          description: Timestamp when the conversation was first created.
+        updated_at:
+          type: string
+          format: date-time
+          description: Timestamp of the latest activity (e.g. a new message) in the conversation.
+        from:
+          type: object
+          description: The party that started or owns the thread (usually the customer; for a page-initiated thread it is the page).
+          properties:
+            id:
+              type: string
+              description: Facebook ID / PSID of the sender.
+            name:
+              type: string
+              description: Display name of the sender.
+            email:
+              type: string
+              nullable: true
+              description: Email address of the sender, if known.
+        last_sent_by:
+          type: object
+          description: Information about whoever sent the most recent message in the conversation.
+          properties:
+            id:
+              type: string
+              description: Facebook ID / PSID of the last sender.
+            name:
+              type: string
+              description: Display name of the last sender.
+            email:
+              type: string
+              nullable: true
+              description: Email of the last sender, if available.
+            uid:
+              type: string
+              nullable: true
+              description: Pancake user UUID of the last sender when the message was sent by a staff member.
+            admin_id:
+              type: string
+              nullable: true
+              description: ID of the admin/staff account that sent the message (for page-side replies).
+            admin_name:
+              type: string
+              nullable: true
+              description: Name of the admin/staff account that sent the message.
+            platform:
+              type: string
+              nullable: true
+              description: Platform the message was sent from.
+            ai_generated:
+              type: boolean
+              description: Whether the last message was generated by AI.
+            is_automated:
+              type: boolean
+              description: Whether the last message was sent automatically (e.g. by an automation/bot rule).
+        tags:
+          type: array
+          description: Tags currently attached to the conversation. Entries may be `null` for tags that have been removed/deactivated.
+          items:
+            type: object
+            nullable: true
+            properties:
+              id:
+                type: integer
+                description: Unique ID of the tag.
+              text:
+                type: string
+                description: Display label of the tag.
+              color:
+                type: string
+                description: Tag color in hex (e.g. `#f28809`).
+              is_deactive:
+                type: boolean
+                description: Whether the tag has been deactivated.
+              is_lead_event:
+                type: boolean
+                description: Whether the tag is configured as a lead/conversion event.
+        tag_histories:
+          type: array
+          description: Chronological log of tag changes on the conversation.
+          items:
+            type: object
+            properties:
+              inserted_at:
+                type: string
+                format: date-time
+                description: When the tag change occurred.
+              conversation_id:
+                type: string
+                description: ID of the conversation the change applies to.
+              payload:
+                type: object
+                description: Details of the tag change.
+                properties:
+                  action:
+                    type: string
+                    description: "Type of change (e.g. `add`, `remove`, `clone`)."
+                  editor_id:
+                    type: string
+                    description: ID of the user who made the change (empty when performed by the system).
+                  editor_name:
+                    type: string
+                    description: Name of the user who made the change.
+                  tag:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                        nullable: true
+                        description: ID of the affected tag.
+                      text:
+                        type: string
+                        description: Label of the affected tag.
+        assignee_ids:
+          type: array
+          description: List of Pancake user UUIDs currently assigned to handle the conversation.
+          items:
+            type: string
+        assignee_group_id:
+          type: string
+          nullable: true
+          description: ID of the staff group the conversation is assigned to, if any.
+        current_assign_users:
+          type: array
+          description: Full details of the staff members currently assigned to the conversation.
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                description: Pancake user UUID of the assignee.
+              name:
+                type: string
+                description: Display name of the assignee.
+              email:
+                type: string
+                nullable: true
+                description: Email of the assignee.
+              fb_id:
+                type: string
+                nullable: true
+                description: Facebook ID of the assignee, if linked.
+        assignee_histories:
+          type: array
+          description: Chronological log of assignment changes on the conversation.
+          items:
+            type: object
+            properties:
+              inserted_at:
+                type: string
+                format: date-time
+                description: When the assignment change occurred.
+              conversation_id:
+                type: string
+                description: ID of the conversation the change applies to.
+              payload:
+                type: object
+                description: Users added to or removed from the assignment in this change.
+                properties:
+                  added_users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AssignUser'
+                  deleted_users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AssignUser'
+        customer_id:
+          type: string
+          description: Global customer ID linking this conversation's contact across the page's customer database.
+        customers:
+          type: array
+          description: Customers participating in the conversation.
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                description: Page-customer ID.
+              fb_id:
+                type: string
+                description: Facebook ID / PSID of the customer.
+              name:
+                type: string
+                description: Display name of the customer.
+        recent_phone_numbers:
+          type: array
+          description: Phone numbers recently collected from the customer, with the related order (if any).
+          items:
+            type: object
+            properties:
+              phone_number:
+                type: string
+                description: The collected phone number.
+              order_id:
+                type: integer
+                description: ID of the order the phone number is associated with.
+        ad_ids:
+          type: array
+          nullable: true
+          description: IDs of the ads that drove this conversation (for ad-originated conversations). `null` when not from an ad.
+          items:
+            type: string
+        ads:
+          type: array
+          nullable: true
+          description: Details of the ads that drove this conversation. `null` when not from an ad.
+          items:
+            type: object
+        page_customer:
+          type: object
+          description: Extended profile of the customer as stored in the page's customer database.
+          properties:
+            id:
+              type: string
+              description: Page-customer ID.
+            name:
+              type: string
+              description: Customer's display name.
+            customer_id:
+              type: string
+              description: Global customer ID (matches the conversation's `customer_id`).
+            psid:
+              type: string
+              description: Page-scoped ID (PSID) of the customer.
+            # global_id:
+            #   type: string
+            #   nullable: true
+            #   description: Customer's global Facebook ID.
+            gender:
+              type: string
+              nullable: true
+              description: Customer's gender, if known.
+            inserted_at:
+              type: string
+              format: date-time
+              description: When the customer was first added to the page.
+            birthday:
+              type: object
+              nullable: true
+              description: Customer's birthday. Components are `0` when unknown.
+              properties:
+                date:
+                  type: integer
+                  description: Day of month.
+                month:
+                  type: integer
+                  description: Month (1–12).
+                year:
+                  type: integer
+                  description: Year.
+            notes:
+              type: array
+              nullable: true
+              description: Internal notes saved about the customer.
+              items:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    description: Unique ID of the note.
+                  message:
+                    type: string
+                    nullable: true
+                    description: Text content of the note.
+                  is_pinned:
+                    type: boolean
+                    description: Whether the note is pinned.
+                  created_at:
+                    type: integer
+                    format: int64
+                    description: Creation time as a Unix timestamp in milliseconds.
+                  updated_at:
+                    type: integer
+                    format: int64
+                    nullable: true
+                    description: Last-updated time as a Unix timestamp in milliseconds.
+                  removed_at:
+                    type: integer
+                    format: int64
+                    nullable: true
+                    description: Removal time as a Unix timestamp in milliseconds, if the note was deleted.
+                  created_by:
+                    type: object
+                    description: Staff member who created the note.
+                    properties:
+                      uid:
+                        type: string
+                        description: Pancake user UUID.
+                      fb_id:
+                        type: string
+                        description: Facebook ID of the author.
+                      fb_name:
+                        type: string
+                        description: Facebook name of the author.
+                  images:
+                    type: array
+                    description: Images attached to the note.
+                    items:
+                      type: object
+                  links:
+                    type: array
+                    description: Links attached to the note.
+                    items:
+                      type: object
+                  edit_history:
+                    type: array
+                    description: Prior versions of the note.
+                    items:
+                      type: object
+            recent_orders:
+              type: array
+              nullable: true
+              description: Customer's most recent orders.
+              items:
+                type: object
+
+    AssignUser:
+      type: object
+      description: A staff member referenced in an assignment change.
+      properties:
+        id:
+          type: string
+          description: Pancake user UUID.
+        name:
+          type: string
+          description: Display name of the user.
+        email:
+          type: string
+          nullable: true
+          description: Email of the user.
+        fb_id:
+          type: string
+          nullable: true
+          description: Facebook ID of the user, if linked.
+    MessagesResponse:
+      type: object
+      description: >
+        Response of the Get messages endpoint. Besides the `messages` array it also returns a rich
+        snapshot of the customer and conversation context (customer profile, notes, recent orders,
+        captured phone numbers, post activities, etc.) so the full thread can be rendered in one call.
+      properties:
+        success:
+          type: boolean
+          description: Whether the request succeeded.
+        conversation_id:
+          type: string
+          description: ID of the conversation the messages belong to.
+        messages:
+          type: array
+          description: The messages in the conversation, ordered from newest to oldest.
+          items:
+            $ref: '#/components/schemas/Message'
+        conv_from:
+          type: object
+          description: The customer (or party) that owns the conversation.
+          properties:
+            id:
+              type: string
+              description: Facebook ID / PSID of the customer.
+            name:
+              type: string
+              description: Display name of the customer.
+            email:
+              type: string
+              nullable: true
+              description: Email address of the customer, if known.
+        customers:
+          type: array
+          description: Detailed profiles of the customers in the conversation (orders, addresses, tags, sources, etc.).
+          items:
+            $ref: '#/components/schemas/MessageCustomer'
+        conv_customers:
+          type: array
+          description: Lightweight reference to each customer in the conversation.
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                description: Page-customer ID.
+              fb_id:
+                type: string
+                description: Facebook ID / PSID of the customer.
+              name:
+                type: string
+                description: Display name of the customer.
+        # global_id:
+        #   type: string
+        #   nullable: true
+        #   description: Customer's global Facebook ID.
+        gender:
+          type: string
+          nullable: true
+          description: Customer's gender, if known.
+        birthday:
+          type: object
+          nullable: true
+          description: Customer's birthday. Components are `0` when unknown.
+          properties:
+            date:
+              type: integer
+              description: Day of month.
+            month:
+              type: integer
+              description: Month (1–12).
+            year:
+              type: integer
+              description: Year.
+        lives_in:
+          type: string
+          nullable: true
+          description: Where the customer lives, if known.
+        profile_updated_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the customer's profile was last updated.
+        can_inbox:
+          type: boolean
+          description: Whether the page can currently send the customer an inbox message (inside the messaging window).
+        is_banned:
+          type: boolean
+          description: Whether the customer is banned on the page.
+        banned_by:
+          type: string
+          nullable: true
+          description: ID of the user who banned the customer, if banned.
+        banned_count:
+          type: integer
+          description: Number of times the customer has been banned.
+        reported_count:
+          type: integer
+          description: Number of times the customer has been reported.
+        allow_use_data_for_training_ai:
+          type: boolean
+          description: Whether the customer's data may be used to train AI.
+        app:
+          type: string
+          description: Internal identifier of the app/platform the conversation belongs to.
+        comment_count:
+          type: integer
+          description: Total number of comments by the customer on the page.
+        last_commented_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the customer last commented.
+        recent_emails:
+          type: array
+          description: Email addresses recently collected from the customer.
+          items:
+            type: string
+        recent_phone_numbers:
+          type: array
+          description: Phone numbers recently collected from the customer.
+          items:
+            type: string
+        conv_phone_numbers:
+          type: array
+          description: Phone numbers detected within this conversation.
+          items:
+            type: string
+        available_for_report_phone_numbers:
+          type: array
+          description: Phone numbers eligible for delivery-report lookups.
+          items:
+            type: string
+        conv_recent_phone_numbers:
+          type: array
+          description: Phone numbers captured from messages, with where they were found.
+          items:
+            type: object
+            properties:
+              phone_number:
+                type: string
+                description: Normalised phone number.
+              captured:
+                type: string
+                description: Raw text the number was extracted from.
+              m_id:
+                type: string
+                description: ID of the message the number was captured from.
+              offset:
+                type: integer
+                description: Character offset of the number within the message.
+              length:
+                type: integer
+                description: Length of the captured number.
+              status:
+                type: integer
+                description: Capture status code.
+        reports_by_phone:
+          type: object
+          description: Per-phone-number delivery report counters, keyed by phone number.
+          additionalProperties:
+            type: object
+            properties:
+              order_success:
+                type: integer
+                description: Number of successfully delivered orders.
+              order_fail:
+                type: integer
+                description: Number of failed orders.
+              warning:
+                type: integer
+                description: Number of warnings.
+        read_watermarks:
+          type: array
+          description: Read markers indicating up to which point each participant has read the conversation.
+          items:
+            type: object
+            properties:
+              psid:
+                type: string
+                description: PSID of the participant.
+              message_id:
+                type: string
+                description: ID of the last message read by the participant.
+              watermark:
+                type: integer
+                format: int64
+                description: Unix timestamp of the read watermark.
+              is_group_conv:
+                type: boolean
+                nullable: true
+                description: Whether this is a group conversation.
+        notes:
+          type: array
+          description: Internal notes saved about the customer.
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                description: Unique ID of the note.
+              message:
+                type: string
+                nullable: true
+                description: Text content of the note.
+              order_id:
+                type: string
+                nullable: true
+                description: ID of the order the note is linked to, if any.
+              created_at:
+                type: integer
+                format: int64
+                description: Creation time as a Unix timestamp in milliseconds.
+              updated_at:
+                type: integer
+                format: int64
+                nullable: true
+                description: Last-updated time as a Unix timestamp in milliseconds.
+              removed_at:
+                type: integer
+                format: int64
+                nullable: true
+                description: Removal time as a Unix timestamp in milliseconds, if deleted.
+              created_by:
+                type: object
+                description: Staff member who created the note.
+                properties:
+                  uid:
+                    type: string
+                    description: Pancake user UUID.
+                  fb_id:
+                    type: string
+                    nullable: true
+                    description: Facebook ID of the author.
+                  fb_name:
+                    type: string
+                    description: Name of the author.
+              images:
+                type: array
+                description: Images attached to the note.
+                items:
+                  type: object
+              links:
+                type: array
+                description: Links attached to the note.
+                items:
+                  type: object
+              edit_history:
+                type: array
+                description: Prior versions of the note.
+                items:
+                  type: object
+        recent_orders:
+          type: array
+          description: Customer's most recent orders.
+          items:
+            type: object
+        activities:
+          type: array
+          description: Recent post activities (comments/reactions) by the customer on the page.
+          items:
+            type: object
+            properties:
+              source:
+                type: string
+                description: "Origin of the activity (e.g. `POST`)."
+              post_id:
+                type: string
+                description: ID of the post the activity relates to.
+              message:
+                type: string
+                nullable: true
+                description: Text content of the activity.
+              inserted_at:
+                type: string
+                format: date-time
+                description: When the activity occurred.
+              attachments:
+                type: object
+                description: Media attached to the activity.
+        post:
+          type: object
+          nullable: true
+          description: The post the conversation is attached to (for comment threads). `null` for inbox threads.
+        ad_clicks:
+          type: object
+          description: Ad-click attribution per customer, keyed by customer ID.
+        matched_wa_fb_customers:
+          type: object
+          nullable: true
+          description: WhatsApp–Facebook customer matches, when applicable.
+        suggested_products:
+          type: object
+          description: Products suggested for the conversation.
+        suggested_posts:
+          type: object
+          description: Posts suggested for the conversation.
+        extra_info:
+          type: object
+          description: Additional computed information about the conversation.
+          properties:
+            sentiment_analysis:
+              type: object
+              description: AI sentiment analysis of the customer's recent messages.
+              properties:
+                analysis_timestamp:
+                  type: string
+                  format: date-time
+                  description: When the analysis was run.
+                last_analyzed_message_id:
+                  type: string
+                  description: ID of the most recent message included in the analysis.
+                last_sentiment:
+                  $ref: '#/components/schemas/Sentiment'
+                previous_sentiment:
+                  $ref: '#/components/schemas/Sentiment'
+
+    Sentiment:
+      type: object
+      description: A single sentiment-analysis result.
+      properties:
+        emotion:
+          type: string
+          description: "Detected emotion (e.g. `neutral`, `positive`, `negative`)."
+        intensity:
+          type: string
+          description: "Strength of the emotion (e.g. `low`, `medium`, `high`)."
+        confidence:
+          type: number
+          format: float
+          description: Model confidence from 0 to 1.
+        reasoning:
+          type: string
+          description: Short explanation of why this sentiment was assigned.
+
+    MessageCustomer:
+      type: object
+      description: Detailed customer profile returned alongside a conversation's messages.
+      properties:
+        id:
+          type: string
+          description: Page-customer ID.
+        customer_id:
+          type: string
+          description: Global customer ID.
+        fb_id:
+          type: string
+          description: Facebook ID / PSID of the customer.
+        global_id:
+          type: string
+          nullable: true
+          description: Customer's global Facebook ID.
+        name:
+          type: string
+          description: Customer's display name.
+        can_inbox:
+          type: boolean
+          description: Whether the page can currently message the customer.
+        is_activated:
+          type: boolean
+          description: Whether the customer account is activated.
+        is_followed:
+          type: boolean
+          nullable: true
+          description: Whether the customer follows the page.
+        currency:
+          type: string
+          description: Currency used for the customer's orders.
+        order_count:
+          type: integer
+          description: Total number of orders placed by the customer.
+        succeed_order_count:
+          type: integer
+          description: Number of successfully completed orders.
+        last_order_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp of the customer's most recent order.
+        purchased_amount:
+          type: number
+          description: Net amount the customer has purchased.
+        reward_point:
+          type: number
+          description: Loyalty/reward points balance.
+        level_id:
+          type: string
+          nullable: true
+          description: ID of the customer's membership level.
+        level_name:
+          type: string
+          nullable: true
+          description: Name of the customer's membership level.
+        color_customer_level:
+          type: string
+          nullable: true
+          description: Display color of the membership level.
+        discount:
+          type: number
+          description: Discount value applied to the customer.
+        discount_type:
+          type: integer
+          description: "Discount type (e.g. percentage vs fixed amount)."
+        is_discount_by_level:
+          type: boolean
+          description: Whether the discount is derived from the membership level.
+        max_discount_by_percent:
+          type: number
+          nullable: true
+          description: Maximum percentage discount allowed for the customer.
+        total_amount_referred:
+          type: number
+          nullable: true
+          description: Total amount attributed to the customer's referrals.
+        emails:
+          type: array
+          description: Email addresses on file for the customer.
+          items:
+            type: string
+        recent_phone_numbers:
+          type: array
+          description: Phone numbers recently collected, with the related order.
+          items:
+            type: object
+            properties:
+              phone_number:
+                type: string
+                description: The phone number.
+              order_id:
+                type: integer
+                description: ID of the related order.
+        tags:
+          type: array
+          description: Tags applied to the customer.
+          items:
+            type: string
+        ad_clicks:
+          type: array
+          description: Ads the customer has clicked.
+          items:
+            type: object
+        address_source:
+          type: array
+          description: Sources from which the customer's addresses were collected.
+          items:
+            type: object
+        personal_info:
+          type: object
+          description: Optional personal details about the customer.
+          properties:
+            job:
+              type: string
+              nullable: true
+              description: Customer's job.
+            gender:
+              type: string
+              nullable: true
+              description: Customer's gender.
+            lives_in:
+              type: string
+              nullable: true
+              description: Where the customer lives.
+            relationship_status:
+              type: string
+              nullable: true
+              description: Customer's relationship status.
+            profile_updated_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: When the personal info was last updated.
+        shop_customer_addresses:
+          type: array
+          description: Saved shipping addresses for the customer.
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                description: Address ID.
+              full_name:
+                type: string
+                description: Recipient name.
+              phone_number:
+                type: string
+                nullable: true
+                description: Recipient phone number.
+              address:
+                type: string
+                nullable: true
+                description: Street/detail part of the address.
+              full_address:
+                type: string
+                description: Fully formatted address.
+              province_id:
+                type: string
+                nullable: true
+                description: Province identifier.
+              district_id:
+                type: string
+                nullable: true
+                description: District identifier.
+              commune_id:
+                type: string
+                nullable: true
+                description: Commune/ward identifier.
+              country_code:
+                type: integer
+                nullable: true
+                description: Country calling code.
+              post_code:
+                type: string
+                nullable: true
+                description: Postal code.
+        web_sources:
+          type: array
+          description: Web/referrer sources (e.g. m.me links with UTM params) that brought the customer in.
+          items:
+            type: object
+            properties:
+              source:
+                type: string
+                description: The source URL/link.
+              params:
+                type: array
+                description: Parameters parsed from the source (e.g. UTM tags).
+                items:
+                  type: string
+              inserted_at:
+                type: string
+                format: date-time
+                description: When this source was recorded.
+
+    Message:
+      type: object
+      description: A single message within a conversation (inbox message or comment).
+      properties:
+        id:
+          type: string
+          description: Unique ID of the message.
+        conversation_id:
+          type: string
+          description: ID of the conversation this message belongs to.
+        page_id:
+          type: string
+          description: ID of the page the message belongs to.
+        type:
+          type: string
+          description: "Channel of the message (e.g. `INBOX`, `COMMENT`)."
+        message:
+          type: string
+          description: Rendered content of the message (may contain HTML such as `<div></div>` for media-only messages).
+        original_message:
+          type: string
+          description: Raw original text of the message, before rendering.
+        from:
+          type: object
+          description: Information about the message sender.
+          properties:
+            id:
+              type: string
+              description: Facebook ID / PSID of the sender.
+            name:
+              type: string
+              description: Sender's display name.
+            email:
+              type: string
+              nullable: true
+              description: Sender's email address.
+            uid:
+              type: string
+              nullable: true
+              description: Pancake user UUID when sent by a staff member.
+            admin_id:
+              type: string
+              nullable: true
+              description: ID of the admin/staff account that sent the message.
+            admin_name:
+              type: string
+              nullable: true
+              description: Name of the admin/staff account that sent the message.
+            ai_generated:
+              type: boolean
+              description: Whether the message was generated by AI.
+            is_automated:
+              type: boolean
+              description: Whether the message was sent automatically (e.g. by POS or an automation rule).
+        inserted_at:
+          type: string
+          format: date-time
+          description: Timestamp when the message was sent.
+        seen:
+          type: boolean
+          description: Whether the message has been seen.
+        has_phone:
+          type: boolean
+          description: Whether a phone number was detected in the message.
+        is_hidden:
+          type: boolean
+          description: Whether the message (comment) is hidden.
+        is_parent_hidden:
+          type: boolean
+          description: Whether the parent comment is hidden.
+        is_removed:
+          type: boolean
+          description: Whether the message was removed.
+        removed_by:
+          type: string
+          nullable: true
+          description: ID of the user who removed the message, if removed.
+        is_parent:
+          type: boolean
+          description: Whether this is a top-level (parent) comment.
+        parent_id:
+          type: string
+          nullable: true
+          description: ID of the parent comment, for replies.
+        comment_count:
+          type: integer
+          nullable: true
+          description: Number of replies to this comment.
+        like_count:
+          type: integer
+          nullable: true
+          description: Number of likes on this comment.
+        user_likes:
+          type: boolean
+          description: Whether the page has liked this comment.
+        is_livestream_order:
+          type: boolean
+          nullable: true
+          description: Whether the comment was parsed as a livestream order.
+        show_info:
+          type: boolean
+          description: Whether to display extra info for the message in the UI.
+        can_comment:
+          type: boolean
+          description: Whether the page can comment on this item.
+        can_like:
+          type: boolean
+          description: Whether the page can like this item.
+        can_hide:
+          type: boolean
+          description: Whether the message can be hidden.
+        can_remove:
+          type: boolean
+          description: Whether the message can be removed.
+        can_reply_privately:
+          type: boolean
+          description: Whether the comment can be answered with a private reply.
+        private_reply_conversation:
+          type: string
+          nullable: true
+          description: ID of the inbox conversation created from a private reply, if any.
+        rich_message:
+          type: object
+          nullable: true
+          description: Extra rich-content metadata for the message (e.g. print status).
+          properties:
+            is_printed:
+              type: boolean
+              description: Whether the message has been printed.
+        edit_history:
+          type: array
+          nullable: true
+          description: Prior versions of the message, if it was edited.
+          items:
+            type: object
+        message_tags:
+          type: array
+          description: Entities detected inside the message text (links, mentions, etc.).
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                description: "Tag type (e.g. `link`)."
+              link:
+                type: string
+                description: The URL, for link tags.
+              offset:
+                type: integer
+                description: Character offset where the entity starts.
+              length:
+                type: integer
+                description: Length of the entity in characters.
+        phone_info:
+          type: array
+          description: Phone numbers detected within this specific message.
+          items:
+            type: object
+        attachments:
+          type: array
+          description: Media and structured attachments on the message.
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                description: "Attachment type — one of `photo`, `video`, `sticker`, `template`, `system_message`."
+              url:
+                type: string
+                description: URL of the media (or thumbnail for videos).
+              id:
+                type: string
+                description: Attachment ID, when present.
+              title:
+                type: string
+                nullable: true
+                description: Title of the attachment.
+              message:
+                type: string
+                nullable: true
+                description: Text body, for `system_message` attachments.
+              link:
+                type: string
+                nullable: true
+                description: External link associated with the attachment.
+              mime_type:
+                type: string
+                nullable: true
+                description: MIME type of the media (e.g. `video/mp4`).
+              video_data:
+                type: object
+                description: Playable video details, for `video` attachments.
+                properties:
+                  url:
+                    type: string
+                    description: Direct URL of the video file.
+                  width:
+                    type: integer
+                    description: Video width in pixels.
+                  height:
+                    type: integer
+                    description: Video height in pixels.
+              payload:
+                type: object
+                description: Structured payload, for `template` attachments.
+                properties:
+                  template_type:
+                    type: string
+                    description: "Template type (e.g. `button`)."
+                  buttons:
+                    type: array
+                    description: Buttons rendered with the template.
+                    items:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                          description: "Button type (e.g. `web_url`)."
+                        title:
+                          type: string
+                          description: Button label.
+                        url:
+                          type: string
+                          description: URL the button opens.
+                        webview_height_ratio:
+                          type: string
+                          description: "Webview height when opened (e.g. `full`)."
+
+    PrivateReply:
+      title: Private Reply
+      type: object
+      description: >
+        Send a private reply to a customer's comment. You can send **either** one text
+        message (`message`) **or** one previously uploaded image (`content_ids` with a
+        single item) — the two are **mutually exclusive** and **at least one is required**.
+        Image private replies are supported on **Facebook only**. The private-reply window
+        is **7 days** from the comment (the 24-hour messaging policy does not apply here).
+      required: [action, post_id, message_id, from_id]
+      properties:
+        action:
+          type: string
+          enum: [private_replies]
+        post_id:
+          type: string
+          description: ID of the post containing the comment
+        message_id:
+          type: string
+          description: ID of the comment you want to send message from
+        from_id:
+          type: string
+          description: Unique identifier of the sender (from.id)
+        message:
+          type: string
+          description: >
+            Text content of the private reply. **Mutually exclusive with `content_ids`** —
+            send one or the other, never both (a request carrying both is rejected). Omit it
+            when replying with an image.
+        content_ids:
+          type: array
+          description: >
+            Reply with **exactly one** previously uploaded image instead of `message`. The
+            array must contain a **single** `content_id` returned by
+            [the content upload API](https://developer.pancake.biz/#/paths/pages-page_id--upload_contents/post).
+
+
+            Constraints:
+
+            - **Facebook pages only.**
+
+            - **Exactly one** item — sending multiple images is not allowed.
+
+            - The content must be an **image** (resolved to a `PHOTO` attachment); non-image content is rejected.
+
+            - **Mutually exclusive with `message`** — do not send both.
+
+            - Reference the image by its `content_id` only; raw image URLs are not accepted.
+          items:
+            type: string
+          example: ["HXrxioW3Ic5DFwffhmOVHspLuMwpWCXfWDoBxiov6DLa3MvakL2GpLQAly7oHDvZT66VEhnYG4zQEi2MhEzhlg"]
+        sender_id:
+          type: string
+          description: >
+            Unique identifier of the sender user. You can get this from the [get users list API](https://developer.pancake.biz/#/paths/pages-page_id--users/get) <br>
+            **Note**: User must have the required subscription plan and page permissions to perform this action
+    InboxMessage:
+      title: Inbox Message
+      type: object
+      required: [action, message]
+      properties:
+        action:
+          type: string
+          enum: [reply_inbox]
+        message:
+          type: string
+          description: |
+            **Text content of the inbox message**
+            
+            ⚠️ **MUTUALLY EXCLUSIVE with `content_ids`**: 
+            - Use `message` for **text-only** messages
+            - Use `content_ids` for **media/template** messages
+            - **DO NOT send both** → API returns **500 error**
+        content_ids:
+          type: array
+          description: |
+            List of content_ids you want to send. Each `content_id` is generated from [the content upload API](https://developer.pancake.biz/#/paths/pages-page_id--upload_contents/post).
+
+            **Maximum number of `content_ids` per API call (by platform):**
+
+            | Platform | Max `content_ids` per call |
+            |---|---|
+            | Facebook | 30 |
+            | Instagram | 10 |
+            | personal_zalo | 30 |
+            | Telegram | 10 |
+            | Chat plugin | 10 |
+            | booking.com | 10 |
+            | mercado_libre | 10 |
+            | All other platforms | 1 |
+
+            For any platform not listed above, send only **one** `content_id` per call — split additional media into separate API calls.
+        filename:
+          type: string
+          description: Specifies the file name for the document being sent. This parameter is only supported when a attachment type is document. If omitted, the file name defaults to `Document`.
+        sender_id:
+          type: string
+          description: >
+            Unique identifier of the sender user. You can get this from the [get users list API](https://developer.pancake.biz/#/paths/pages-page_id--users/get) <br>
+            **Note**: User must have the required subscription plan and page permissions to perform this action
+        reply_message_id:
+          type: string
+          description: ID of the message you want to reply to
+    ReplyComment:
+      title: Reply Comment
+      type: object
+      required: [action, message_id, message]
+      properties:
+        action:
+          type: string
+          enum: [reply_comment]
+        message_id:
+          type: string
+          description: ID of the comment you want to reply to
+        message:
+          type: string
+          description: Content of the reply message
+        content_ids:
+          type: array
+          description: |
+            List of content_ids you want to send. Each `content_id` is generated from [the content upload API](https://developer.pancake.biz/#/paths/pages-page_id--upload_contents/post).
+
+            **Maximum number of `content_ids` per API call (by platform):**
+
+            | Platform | Max `content_ids` per call |
+            |---|---|
+            | Facebook | 30 |
+            | Instagram | 10 |
+            | personal_zalo | 30 |
+            | Telegram | 10 |
+            | Chat plugin | 10 |
+            | booking.com | 10 |
+            | mercado_libre | 10 |
+            | All other platforms | 1 |
+
+            For any platform not listed above, send only **one** `content_id` per call — split additional media into separate API calls.
+        sender_id:
+          type: string
+          description: >
+            Unique identifier of the sender user. You can get this from the [get users list API](https://developer.pancake.biz/#/paths/pages-page_id--users/get) <br>
+            **Note**: User must have the required subscription plan and page permissions to perform this action
+        mentions:
+          type: array
+          items:
+            type: object
+            properties:
+              psid:
+                type: string
+                description: Customer's PSID
+              name:
+                type: string
+                description: Customer's name
+              offset:
+                type: integer
+              length:
+                type: integer
+
+    WhatsappTemplateMessage:
+      title: WhatsApp Template Message
+      type: object
+      required:
+        - action
+        - template_id
+      properties:
+        action:
+          type: string
+          enum:
+            - reply_inbox
+          description: Must be `reply_inbox` when sending WhatsApp template message
+        conversation_id:
+          type: string
+          description: > 
+            **Tip**: In case of sending to a new phone number, you can manually create a conversation_id according to the following structure: [pageID]_[phoneNumber]. `Example: waba_1234567890_821234567890`
+        template_id:
+          type: string
+          description: Approved WhatsApp template ID
+        template_params:
+          $ref: '#/components/schemas/WhatsappTemplateParams'
+        sender_id:
+          type: string
+          description: >
+            Unique identifier of the sender user. You can get this from the [get users list API](https://developer.pancake.biz/#/paths/pages-page_id--users/get) <br>
+            **Note**: User must have the required subscription plan and page permissions to perform this action
+
+    WhatsappTemplateParams:
+      type: object
+      description: >
+        Parameters used to replace variables in WhatsApp template components.
+        Structure follows Meta WhatsApp template format (Header, Body, Buttons).
+      properties:
+        HEADER_PARAMS:
+          $ref: '#/components/schemas/WhatsappTemplateHeaderParams'
+        BODY_PARAMS:
+          $ref: '#/components/schemas/WhatsappTemplateBodyParams'
+        BUTTONS_[Index]_PARAMS:
+          $ref: '#/components/schemas/WhatsappTemplateButtonParams'
+
+    WhatsappTemplateBodyParams:
+      type: object
+      description: >
+        Variables used in template body
+        `Example: { "order_id": "A12345", "customer_name": "John Doe", "product_name": "Product Name" }`
+      properties:
+        type: object
+
+    WhatsappTemplateButtonParams:
+      type: object
+      description: >
+        [Index] is the index of the button
+        `Example: { "BUTTONS_0_PARAMS": { "{{order_id}}": "A12345", "{{customer_name}}": "John Doe", "{{product_name}}": "Product Name" } }`
+      properties:
+        type: object
+
+    WhatsappTemplateHeaderParams:
+      oneOf:
+        - $ref: '#/components/schemas/WhatsappTemplateHeaderText'
+        - $ref: '#/components/schemas/WhatsappTemplateHeaderImage'
+        - $ref: '#/components/schemas/WhatsappTemplateHeaderVideo'
+        - $ref: '#/components/schemas/WhatsappTemplateHeaderDocument'
+
+    WhatsappTemplateHeaderText:
+      type: object
+      description: >
+        Header parameters when header type is text
+        `Example: { "order_id": "A12345" }`
+      properties:
+        type: object
+
+    WhatsappTemplateHeaderImage:
+      type: object
+      description: >
+        Header parameters when header type is image
+        `Example: { "IMAGE": { "url": "https://example.com/image.jpg" } }`
+      properties:
+        type: object
+
+    WhatsappTemplateHeaderVideo:
+      type: object
+      description: >
+        Header parameters when header type is video
+        `Example: { "VIDEO": { "url": "https://example.com/video.mp4" } }`
+      properties:
+        type: object
+
+    WhatsappTemplateHeaderDocument:
+      type: object
+      description: >
+        Header parameters when header type is document
+        `Example: { "DOCUMENT": { "url": "https://example.com/document.pdf", "name": "document.pdf" } }`
+      properties:
+        type: object
+    
+
+    
