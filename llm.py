@@ -1,7 +1,4 @@
-"""Shared LLM transport/config/budget; legacy interpretation helpers retained for compatibility.
-
-Live contextual conversations use dialogue.respond(), not assist().
-"""
+"""Optional, budgeted interpretation. No model-written customer replies or tools."""
 import json
 import logging
 import math
@@ -32,11 +29,10 @@ DEFAULTS = {
     'api_key_env': 'OPENAI_API_KEY',
     'daily_budget_usd': 1.0,
     'max_calls_per_conversation': 10,
-    'timeout_seconds': 10,
-    'max_output_tokens': 1024,
-    'max_input_bytes': 24000,
+    'timeout_seconds': 5,
+    'max_output_tokens': 512,
+    'max_input_bytes': 16000,
     'faq': [],
-    'history_turns': 8,
 }
 FIELDS = ('size', 'color', 'phone', 'address', 'weight_kg', 'height_cm')
 SCHEMA = {
@@ -84,11 +80,11 @@ def settings(value):
         raise ValueError('llm.api_key_env required')
     for key, lo, hi in [('daily_budget_usd', 0, 1000), ('timeout_seconds', 1, 15),
                         ('max_calls_per_conversation', 0, 100), ('max_output_tokens', 128, 2048),
-                        ('max_input_bytes', 2000, 64000), ('history_turns', 1, 20)]:
+                        ('max_input_bytes', 2000, 64000)]:
         number = options[key]
         if type(number) not in (int, float) or not math.isfinite(number) or not lo <= number <= hi:
             raise ValueError('llm: invalid ' + key)
-        if key in ('max_calls_per_conversation', 'max_output_tokens', 'max_input_bytes', 'history_turns') and type(number) is not int:
+        if key in ('max_calls_per_conversation', 'max_output_tokens', 'max_input_bytes') and type(number) is not int:
             raise ValueError('llm: integer required for ' + key)
     if not isinstance(options['faq'], list):
         raise ValueError('llm.faq must be a list')

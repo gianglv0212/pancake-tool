@@ -1,10 +1,5 @@
 # Pancake Auto Reply — Python
 
-Inbox live với `llm.enabled: true` dùng bộ xử lý hội thoại có ngữ cảnh trong
-`dialogue.py`: đọc lịch sử, hiểu ý khách và viết lời tư vấn/hỏi lại tự nhiên.
-Code kiểm tra dữ liệu, xác nhận đơn và mua lại; cấu hình và giới hạn nằm trong
-[SALES-FLOW.md](SALES-FLOW.md). Khi tắt LLM hoặc chạy dry-run, bot dùng quy tắc cũ.
-
 Job giảm giá tùy chọn: [DISCOUNT-FOLLOWUP.md](DISCOUNT-FOLLOWUP.md).
 Sửa `discount_followup` của từng page trong `config.json` để bật/tắt, đặt giá và nội dung.
 

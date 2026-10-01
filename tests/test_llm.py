@@ -183,17 +183,15 @@ class LLMTests(unittest.TestCase):
         process_one(self.store, self.config)  # initial size prompt, no paid request
         self.store.enqueue(event('55', message_id='weight'))
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'fake'}), patch('llm.request_model', return_value=response(
-                {'reply': 'Dạ chị muốn chọn M cho lần này không ạ?', 'action': 'reply', 'evidence': '',
-                 'question': 'size', 'updates': [dict(update('weight_kg', '55', '55'), source='current')],
-                 'fact_ids': [], 'reuse_fields': [], 'send_photos': False})), patch('media.prepare', side_effect=lambda s,p,t,b: b), patch('bot.time.sleep'):
+                interpretation([update('weight_kg', '55', '55')]))), patch('media.prepare', side_effect=lambda s,p,t,b: b), patch('bot.time.sleep'):
             process_one(self.store, self.config, live=True, sender=lambda *a: 'sent')
-        self.assertEqual(self.store.lead('p1', 'c1')['stage'], 'size')
-        self.assertEqual(self.store.lead('p1', 'c1')['pending']['suggested_size'], 'M')
+        self.assertEqual(self.store.lead('p1', 'c1')['stage'], 'size_confirm')
+        self.assertEqual(self.store.lead('p1', 'c1')['suggested_size'], 'M')
 
     def test_input_limit_and_zero_budget_prevent_network(self):
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'fake'}), patch('llm.request_model') as model:
             self.assertIsNone(self.call(page=self.page(daily_budget_usd=0)))
-            self.assertIsNone(self.call('x' * 65000))
+            self.assertIsNone(self.call('x' * 17000))
             model.assert_not_called()
 
     def test_partial_parse_still_calls_model_for_pending_size(self):
@@ -237,20 +235,18 @@ class LLMTests(unittest.TestCase):
         process_one(self.store, self.config)
         for index in range(5):
             self.store.enqueue(event('chưa rõ lắm', message_id='unclear-' + str(index)))
-            with patch('llm.request_model', return_value=response(
-                    {'reply': 'Chị đang phân vân về độ rộng hay chiều dài của áo ạ?', 'action': 'reply',
-                     'evidence': '', 'question': 'clarify', 'updates': [],
-                     'fact_ids': [], 'reuse_fields': [], 'send_photos': False}),
+            with patch('llm.request_model', return_value=response(interpretation(
+                    [update('size', 'M', 'M')], unclear=True)),
                     side_effect=TimeoutError if index == 4 else None), \
                     patch('media.prepare', side_effect=lambda s,p,t,b: b), patch('bot.time.sleep'):
                 sent = []
                 process_one(self.store, self.config, live=True,
                             sender=lambda *args: sent.append(args[-1]) or 'sent')
             lead = self.store.lead('p1', 'c1')
-            self.assertEqual(lead['stage'], 'dialogue')
+            self.assertEqual(lead['stage'], 'size')
             self.assertNotIn('size', lead)
-            self.assertTrue(any('độ rộng hay chiều dài' in body.get('message', '') for body in sent) if index < 4
-                            else any('trục trặc' in body.get('message', '') for body in sent))
+            self.assertTrue(any(body.get('message') == page['_sales_script']['prompts']['size_unclear']
+                                for body in sent))
 
     def test_config_validation(self):
         for invalid in [{'api_key': 123}, {'enabled': 'false'}, {'daily_budget_usd': -1}, {'daily_budget_usd': float('nan')},

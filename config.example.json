@@ -73,12 +73,11 @@
         "api_key_env": "OPENAI_API_KEY",
         "daily_budget_usd": 1.0,
         "max_calls_per_conversation": 10,
-        "timeout_seconds": 10,
-        "max_output_tokens": 1024,
-        "max_input_bytes": 24000,
+        "timeout_seconds": 5,
+        "max_output_tokens": 512,
+        "max_input_bytes": 16000,
         "faq": [],
-        "api_key": "",
-        "history_turns": 8
+        "api_key": ""
       }
     }
   }

@@ -309,13 +309,20 @@ def process_one(store, config, live=False, sender=send):
         if page.get('_sales_script'):
             from sales import decide
             previous = store.lead(job['page'], job['conversation'])
-            decision = None
-            if plan(config, event, state, validate_only=True, lead=previous):
-                if live and page.get('llm', {}).get('enabled') and event['data']['message']['type'] == 'INBOX':
-                    from dialogue import respond
-                    decision = respond(store, page, event, previous)
-                else:
-                    decision = decide(page['_sales_script'], event, previous)
+            decision = (decide(page['_sales_script'], event, previous)
+                        if plan(config, event, state, validate_only=True, lead=previous) else None)
+            if decision and page.get('llm', {}).get('enabled'):
+                from llm import assist, trace
+                previous = store.lead(job['page'], job['conversation'])
+                assistance = assist(store, page, event, previous, decision, live=live)
+                decision = decide(page['_sales_script'], event, previous,
+                                  {**(assistance or {}), 'keep_clarifying': True})
+                trace(event, 'llm_final_decision', {
+                    'previous_stage': previous.get('stage', 'start'),
+                    'stage': decision['lead'].get('stage') if decision else None,
+                    'assistance_used': assistance,
+                    'replies': decision.get('bodies', []) if decision else [],
+                    'delivery': 'planned; inspect send_status for delivery' if live else 'dry_run; not sent'})
         else:
             decision = plan(config, event, state)
         if not decision:
@@ -348,8 +355,6 @@ def process_one(store, config, live=False, sender=send):
                     time.sleep(.3)
         accepted = status in ('sent', 'handoff', 'dry_run')
         failed_lead = dict(decision['lead'], stage='error') if decision.get('lead') else None
-        if decision.get('rule', '').startswith('dialogue:'):
-            failed_lead = previous  # Do not persist an unsent question/confirmation.
         if page.get('_sales_script') and (previous.get('stage') in ('complete', 'stopped', 'reorder_confirm', 'contact_reuse_confirm')
                                           or decision.get('new_session') or decision.get('lead', {}).get('stage') == 'complete'):
             # A failed send must not consume consent or replace the old purchase.
