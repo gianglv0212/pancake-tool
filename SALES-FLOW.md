@@ -1,5 +1,16 @@
 # Kịch bản từ reply-quicks.md
 
+> **Luồng LLM hiện tại:** xem [LLM-STEPS.md](LLM-STEPS.md). LLM hỗ trợ riêng bước
+> đang chờ, validator độc lập với parser và có thể viết câu hỏi làm rõ theo tin
+> khách. Phần mô tả LLM dự phòng/mẫu clarification bên dưới ghi lại phiên bản cũ;
+> dùng LLM-STEPS.md làm hướng dẫn vận hành hiện tại.
+
+> Cập nhật: chức năng FAQ trong LLM đã được bỏ. Không còn khớp từ khóa FAQ,
+> gửi danh sách FAQ cho model hoặc nhận `faq_ids`. LLM chỉ diễn giải ý định và
+> trích xuất dữ liệu qua validator. Khóa `llm.faq` trong config cũ được bỏ qua để
+> không gây lỗi khởi động. Các mô tả/sơ đồ FAQ bên dưới là hành vi phiên bản cũ,
+> không còn áp dụng. Khởi động lại bot để áp dụng thay đổi này.
+
 Nguồn được đọc dạng TSV (cột ngăn bằng tab), hỗ trợ message nhiều dòng trong dấu
 ngoặc kép. Sắp xếp số `quickReplyIndex` tăng dần, giữ thứ tự các dòng cùng index.
 File gốc không bị sửa. Bản dùng thực tế là `sales-script.json`, đã gắn vào các page
@@ -23,8 +34,8 @@ khóa vì sẽ khớp nhầm gần như mọi tin nhắn.
 1. Lần đầu hoặc khách hỏi `giá`, `bao nhiêu`, `xin ảnh`, `xem ảnh`, `chất liệu`, `vải gì`:
    gửi nhóm 2 theo đúng thứ tự. Thay `#{FULL_NAME}` bằng tên người gửi.
 2. Nhận size khách chọn: `size M`, `sz XL`, `2XL`, `lấy L`, `M nhé`…
-   Hoặc nhận cân nặng `55kg`, `55 ký` và chiều cao `1m60`, `160cm`.
-   Gợi ý theo bảng gốc, yêu cầu xác nhận size; không coi cân nặng là quyết định size.
+   Hoặc nhận cân nặng `55kg`, `55 ký`, `chị nặng 55`, `cân nặng: 55`; số trần `55` được nhận ở bước chọn size.
+   Chỉ cần cân nặng trong bảng là đủ để chọn size, gửi thông báo size phù hợp và chuyển bước. Chiều cao `1m60`, `160cm` là tùy chọn.
    Cân nặng ngoài bảng hoặc khoảng trống như 48,5kg cần chọn size hoặc hỏi nhân viên.
 3. Chưa có SĐT: hỏi SĐT. Nhận số di động Việt Nam 10 chữ số bắt đầu 03/05/07/08/09,
    hỗ trợ +84, dấu cách/chấm/gạch ngang. Không tự chọn nếu có nhiều số khác nhau.

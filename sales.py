@@ -23,6 +23,9 @@ def select_script(document, page_id):
         raise ValueError('product.colors must be a list of non-empty color names')
     if len({normalize(c) for c in colors}) != len(colors):
         raise ValueError('product.colors contains duplicate colors')
+    photos = script.get('product', {}).get('color_photos', [])
+    if not isinstance(photos, list) or any(not isinstance(url, str) or not url.startswith(('https://', 'http://')) for url in photos):
+        raise ValueError('product.color_photos must be a list of HTTP(S) image URLs')
     script['prompts'].setdefault('color', 'Chị chọn màu nào ạ? Shop có các màu: {colors}.')
     return script
 
@@ -32,20 +35,36 @@ def extract_color(text, lead, colors):
     if not colors:
         return result
     n = normalize(text)
-    if result.get('color') not in colors or re.search(r'\b(?:doi|sua|sai) mau\b', n):
+    stored = result.get('color', '').split(', ')
+    if any(c not in colors for c in stored) or re.search(r'\b(?:doi|sua|sai) mau\b', n):
         result.pop('color', None)
     # Only accept an explicit selection or a reply consisting of a color name.
     # Do not infer colors from addresses, questions, negations or alternatives.
     if '?' in text or re.search(r'\b(khong|ko|chua|hay|hoac|con|het)\b', n):
         return result
+    clauses = re.split(r'[;\n]+', text)
+    if len(clauses) > 1:
+        selected = []
+        for clause in clauses:
+            choice = extract_color(clause, {}, colors).get('color')
+            if choice:
+                selected.extend(c for c in choice.split(', ') if c not in selected)
+        if selected:
+            result['color'] = ', '.join(selected)
+        return result
     matches = []
+    remainder = n
     for color in colors:
         label = re.escape(normalize(color))
-        if (re.fullmatch(r'(?:da |vang )?(?:(?:lay|chon) )?(?:mau )?' + label + r'(?: nhe| nha| a| nhe a)?[.!]*', n)
-                or re.search(r'\b(?:mau|chon|lay)\s+' + label + r'(?!\w)', n)):
+        if re.search(r'(?<!\w)' + label + r'(?!\w)', n):
             matches.append(color)
-    if len(matches) == 1:
-        result['color'] = matches[0]
+            remainder = re.sub(r'(?<!\w)' + label + r'(?!\w)', ' ', remainder)
+    # Accept definite selections and lists, while excluding address text and unknown colors.
+    if matches and re.fullmatch(
+            r'(?:\s|[,;/.!+&]|\d|\b(?:da|vang|chi|em|anh|toi|minh|lay|chon|chot|mau|va|voi|them|'
+            r'cho|nhe|nha|a|shop|bo|cai|mot|hai|ba|doi|sua|sang)\b)*', remainder):
+        matches.sort(key=lambda c: re.search(r'(?<!\w)' + re.escape(normalize(c)) + r'(?!\w)', n).start())
+        result['color'] = ', '.join(matches)
     return result
 
 
@@ -54,6 +73,8 @@ def compile_script(source, output):
         rows = list(csv.DictReader(stream, delimiter='\t'))
     groups = {}
     for row in sorted(rows, key=lambda row: int(row['quickReplyIndex'])):
+        if int(row['quickReplyIndex']) not in (2, 3, 4, 5):
+            continue
         group = groups.setdefault(str(int(row['quickReplyIndex'])), [])
         if row.get('message', '').strip():
             group.append({'message': row['message'].strip()})
@@ -63,10 +84,9 @@ def compile_script(source, output):
         'comment': 'Dạ chào chị #{FULL_NAME}, chị nhắn Messenger cho shop để được báo giá và tư vấn size nhé ạ!',
         'phone': 'Chị cho shop xin số điện thoại liên hệ nhận hàng nhé ạ.',
         'address': 'Chị cho shop xin địa chỉ nhận hàng đầy đủ: số nhà/tên đường hoặc thôn/ấp, phường/xã và tỉnh/thành phố nhé ạ.',
-        'size_confirm': 'Theo bảng cân nặng, shop gợi ý size {size}. Chị xác nhận chọn size {size} giúp shop nhé ạ; nếu muốn mặc rộng hơn chị cho shop biết để nhân viên tư vấn thêm.',
+        'size_confirm': 'Chị yêu mặc size {size} bên em là vừa xinh đó ạ ❤️',
         'size_unclear': 'Shop chưa xác định chắc size phù hợp. Chị cho shop biết size muốn chọn (S, M, L, XL, 2XL), hoặc nhắn “nhân viên” để được tư vấn nhé ạ.',
-        'confirm': 'Shop ghi nhận: size {size}; SĐT {phone}; địa chỉ {address}. Chị kiểm tra và nhắn “đúng rồi” nếu thông tin chính xác, hoặc gửi lại phần cần sửa nhé ạ.',
-        'complete': 'Shop đã nhận đủ thông tin của chị và chuyển sang bước nhân viên kiểm tra sản phẩm, xác nhận đơn. Cảm ơn chị ạ!',
+        'confirm': 'Shop đã ghi nhận: size {size}; SĐT {phone}; địa chỉ {address}. Cảm ơn chị đã đặt hàng ạ!',
         'human': 'Shop đã ghi nhận yêu cầu tư vấn của chị. Chị vui lòng chờ nhân viên hỗ trợ nhé ạ.',
         'stop': 'Dạ shop ghi nhận, bot sẽ dừng nhắn tại cuộc trò chuyện này ạ.'}}
     Path(output).write_text(json.dumps(script, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
@@ -123,7 +143,30 @@ def selected_size(text):
     return choices.pop() if len(choices) == 1 else None
 
 
-def extract(text, lead):
+def address_is_ambiguous(text):
+    return bool(re.search(r'[?？]|\b(?:khong|ko|chua|hay|hoac|doi sau|ship|giao hang|bao lau|bao nhieu|kiem hang|doi tra|tu van)\b', normalize(text)))
+
+
+def address_only(text, stage=None):
+    """Conservative fast path for a standalone delivery address, at any active stage."""
+    candidate = re.sub(r'^(?:địa chỉ|dia chi|đ/c|d/c|giao (?:đến|den|tới|toi)|gửi (?:về|ve))\s*[:：-]?\s*', '', text.strip(), flags=re.I)
+    n = normalize(candidate)
+    # Only a direct answer to an address prompt may omit the hamlet/street label.
+    named_location = stage == 'address' and re.fullmatch(
+        r"[a-z0-9][a-z0-9 .'-]*,\s*(?:xa|phuong)\s+[a-z0-9][a-z0-9 .'-]*,\s*"
+        r"(?:(?:tinh|thanh pho|tp\.?)\s+[a-z][a-z .'-]*|ha noi|hcm|ho chi minh|da nang|hai phong|can tho)[.! ]*", n)
+    if not named_location and not re.match(r'^(?:\d|(?:duong|thon|ap|hem|ngo|so nha|to|khu pho|xom|lang|so|dia chi|toa)\b)', n):
+        return None
+    if address_is_ambiguous(candidate) or re.search(r'\b(?:size|sdt|phone)\b', n):
+        return None
+    if (len(candidate) >= 15
+            and re.search(r'\b(?:phuong|xa|quan|huyen|p\.|q\.)', n)
+            and re.search(r'\b(?:tinh|thanh pho|tp|ha noi|hcm|ho chi minh|da nang|hai phong|can tho)\b', n)):
+        return candidate
+    return None
+
+
+def extract(text, lead, relaxed_address=False):
     """Only confirmed size labels and plausible VN mobile numbers become fields."""
     result = dict(lead)
     n = normalize(text)
@@ -146,8 +189,15 @@ def extract(text, lead):
     if len(valid) == 1 and not re.search(r'\b(khong phai|so cu|sai so)\b', n):
         result['phone'] = valid.pop()
     weight = re.search(r'(?<!\d)(\d{2,3}(?:[.,]\d)?)\s*(?:kg|ky|can|kilogram)\b', n)
+    if not weight:
+        weight = re.search(r'\b(?:can nang|nang)\s*[:：]?\s*(\d{2,3}(?:[.,]\d)?)(?!\d)', n)
+    if not weight and lead.get('stage') in ('size', 'size_confirm'):
+        weight = re.fullmatch(r'\s*(?:(?:da|vang|chi|em|anh|minh)\s+)*'
+                              r'(\d{2,3}(?:[.,]\d)?)(?:\s+(?:nhe|nha|a|shop|em))*[.! ]*', n)
     if weight:
-        result['weight_kg'] = float(weight[1].replace(',', '.'))
+        value = float(weight[1].replace(',', '.'))
+        if 20 <= value <= 250:
+            result['weight_kg'] = value
     height = re.search(r'(?<!\d)(1)[m.,](\d{2})(?!\d)', n)
     cm = re.search(r'(?<!\d)(1\d{2})\s*cm\b', n)
     if height:
@@ -155,24 +205,32 @@ def extract(text, lead):
     elif cm:
         result['height_cm'] = int(cm[1])
     address_match = re.search(r'(?:địa chỉ|dia chi|đ/c|d/c|giao (?:đến|den|tới|toi)|gửi (?:về|ve))\s*[:：-]?\s*(.+)', text, re.I | re.S)
-    address = address_match[1].strip() if address_match else ''
+    address = address_match[1].strip() if address_match else (address_only(text, lead.get('stage')) or '')
     if not address and lead.get('stage') == 'address':
         address = text.strip()
     # Reject generic acknowledgements and incomplete location-only answers.
     address_n = normalize(address)
-    detail = re.search(r'\b(duong|thon|ap|hem|ngo|so nha|to|khu pho)\b|\d', address_n)
-    locality = re.search(r'\b(phuong|xa|quan|huyen|p\.|q\.)', address_n)
+    detail = re.search(r'\b(duong|thon|ap|hem|ngo|so nha|to|khu pho|xom|lang|so|dia chi|toa)\b|\d', address_n)
+    if not detail and lead.get('stage') == 'address':
+        detail = bool(address_only(address, 'address'))
+    locality = re.search(r'\b(phuong|xa|quan|huyen|thi tran|thi xa|p\.|q\.)', address_n)
     province = re.search(r'\b(tinh|thanh pho|tp|ha noi|hcm|ho chi minh|da nang|hai phong|can tho)\b', address_n)
-    if len(address) >= 15 and detail and locality and province and not re.search(r'\b(khong|chua|doi sau)\b', address_n):
+    relaxed = (relaxed_address and (lead.get('stage') == 'address' or address_match)
+               and len(address) >= 10 and len(address_n.split()) >= 3
+               and re.search(r'[a-z]', address_n)
+               and not is_affirmation(address)
+               and not re.search(r'\b(?:size|sz|sdt|phone|kg|cao|can nang|cam on|de chi|de em|cho chi|cho em|doi chut)\b', address_n))
+    if ((len(address) >= 15 and detail and locality and province) or relaxed) and not address_is_ambiguous(address):
         # Remove explicitly labelled phone/size segments from the address.
         address = re.split(r'(?:[;\n]\s*(?:sđt|sdt|đt|phone|size|sz)\s*[:：])', address, flags=re.I)[0].strip(' ,;')
         result['address'] = address
     return result
 
 
-def decide(script, event, previous, assistance=None):
+def decide(script, event, previous, assistance=None, relaxed_address=False):
     from reorders import lifecycle
-    handled, decision = lifecycle(script, event, previous)
+    from step_support import confirmation_snapshot
+    handled, decision = lifecycle(script, event, previous, assistance)
     if handled:
         return decision
     data = event['data']
@@ -215,19 +273,28 @@ def decide(script, event, previous, assistance=None):
         prompt('stop')
         lead['stage'] = 'stopped'
     elif intent == 'human':
-        lead = extract_color(message['message'], extract(message['message'], lead), colors)
+        lead = extract_color(message['message'], extract(message['message'], lead, relaxed_address), colors)
         prompt('human')
         lead['stage'] = 'human'
     elif script.get('discount_followup', {}).get('enabled') and hesitant(message['message'],script['discount_followup']):
-        lead = extract_color(message['message'], extract(message['message'], lead), colors)
+        lead = extract_color(message['message'], extract(message['message'], lead, relaxed_address), colors)
         text(script['discount_followup']['hesitation_reply'])
         lead['stage'] = 'hesitating'
     else:
-        lead = extract_color(message['message'], extract(message['message'], lead), colors)
+        lead = extract_color(message['message'], extract(message['message'], lead, relaxed_address), colors)
         lead.update(assistance.get('updates', {}))
+        if 'pending_address_texts' in assistance:
+            lead['pending_address_texts'] = assistance['pending_address_texts']
+            lead.pop('pending_address_parts', None)
+        if assistance.get('updates', {}).get('address') or lead.get('address'):
+            lead.pop('pending_address_parts', None)
+            lead.pop('pending_address_texts', None)
         if assistance.get('updates', {}).get('size'):
             lead.pop('suggested_size', None)
-        affirm = is_affirmation(message['message'])
+        bound = assistance.get('confirmed_snapshot')
+        model_affirm = bool(bound and bound == confirmation_snapshot(previous, script)
+                            and all(lead.get(k) == previous.get(k) for k in required))
+        affirm = is_affirmation(message['message']) or model_affirm
         if previous.get('stage') == 'contact_reuse_confirm':
             if affirm:
                 for key, value in previous.get('previous_contact', {}).items():
@@ -240,71 +307,79 @@ def decide(script, event, previous, assistance=None):
                 lead.pop('previous_contact', None)
         if previous.get('stage') == 'size_confirm' and affirm and lead.get('suggested_size'):
             lead['size'] = lead.pop('suggested_size')
-        if previous.get('stage') == 'confirm' and affirm and all(lead.get(k) and lead.get(k) == previous.get(k) for k in required):
-            prompt('complete')
-            lead['stage'] = 'complete'
-        else:
-            price = not assistance.get('answers') and bool(re.search(r'\b(gia|bao nhieu|xin anh|xem anh|mau ao|chat lieu|vai gi)\b', n))
-            if not lead.get('introduced') or price:
-                group(2)
-                lead['introduced'] = True
-            if not lead.get('size'):
-                weight = lead.get('weight_kg')
-                suggestion = next((size for lo, hi, size in [(42,48,'S'), (49,55,'M'), (56,61,'L'), (62,69,'XL'), (70,80,'2XL')]
-                                   if weight is not None and lo <= weight <= hi), None)
-                if suggestion:
-                    lead['suggested_size'] = suggestion
-                    group(3)
-                    prompt('size_confirm', size=suggestion)
-                    lead['stage'] = 'size_confirm'
-                elif weight is not None:
-                    prompt('size_unclear')
-                    lead['stage'] = 'size'
-                elif re.search(r'\b(size|sz|bang size|bang sz)\b', n):
-                    group(3)
-                    group(4)
-                    lead['stage'] = 'size'
-                else:
-                    if previous.get('introduced') and not price:
-                        if assistance.get('keep_clarifying'):
-                            prompt('size_unclear')
-                        else:
-                            group(5)
-                    lead['stage'] = 'size'
-            elif colors and not lead.get('color'):
-                prompt('color', colors=', '.join(colors))
-                lead['stage'] = 'color'
-            elif lead.get('previous_contact') and not lead.get('contact_checked') and (not lead.get('phone') or not lead.get('address')):
-                contact = lead['previous_contact']
-                details = '; '.join(f'{label}: {contact[key]}' for key, label in [('phone', 'SĐT'), ('address', 'địa chỉ')] if contact.get(key) and not lead.get(key))
-                text('Chị có muốn dùng lại thông tin nhận hàng của đơn trước (' + details + ')? Chị nhắn “đúng rồi” để dùng lại, hoặc “không” để nhập thông tin mới nhé ạ.')
-                lead['stage'] = 'contact_reuse_confirm'
-            elif not lead.get('phone'):
-                prompt('phone')
-                lead['stage'] = 'phone'
-            elif not lead.get('address'):
-                prompt('address')
-                lead['stage'] = 'address'
+        price = not assistance.get('answers') and bool(re.search(r'\b(gia|bao nhieu|xin anh|xem anh|mau ao|chat lieu|vai gi)\b', n))
+        if not lead.get('introduced'):
+            group(2)
+            lead['introduced'] = True
+        if not lead.get('size'):
+            weight = lead.get('weight_kg')
+            suggestion = next((size for lo, hi, size in [(42,48,'S'), (49,55,'M'), (56,61,'L'), (62,69,'XL'), (70,80,'2XL')]
+                               if weight is not None and lo <= weight <= hi), None)
+            if suggestion:
+                lead['size'] = suggestion
+                lead.pop('suggested_size', None)
+                prompt('size_confirm', size=suggestion)
+            elif weight is not None:
+                prompt('size_unclear')
+                lead['stage'] = 'size'
+            elif re.search(r'\b(size|sz|bang size|bang sz)\b', n):
+                group(3)
+                group(4)
+                lead['stage'] = 'size'
             else:
-                prompt('confirm', **{k: lead.get(k, '') for k in ('size', 'phone', 'address', 'color')})
-                if colors and '{color}' not in script['prompts']['confirm']:
-                    output[-1]['message'] = 'Màu: ' + lead['color'] + '. ' + output[-1]['message']
-                lead['stage'] = 'confirm'
+                if previous.get('introduced') and not price:
+                    if assistance.get('keep_clarifying'):
+                        prompt('size_unclear')
+                    else:
+                        group(5)
+                lead['stage'] = 'size'
+        if not lead.get('size'):
+            lead['stage'] = 'size'
+        elif colors and not lead.get('color'):
+            prompt('color', colors=', '.join(colors))
+            lead['stage'] = 'color'
+        elif lead.get('previous_contact') and not lead.get('contact_checked') and (not lead.get('phone') or not lead.get('address')):
+            contact = lead['previous_contact']
+            details = '; '.join(f'{label}: {contact[key]}' for key, label in [('phone', 'SĐT'), ('address', 'địa chỉ')] if contact.get(key) and not lead.get(key))
+            text('Chị có muốn dùng lại thông tin nhận hàng của đơn trước (' + details + ')? Chị nhắn “đúng rồi” để dùng lại, hoặc “không” để nhập thông tin mới nhé ạ.')
+            lead['stage'] = 'contact_reuse_confirm'
+        elif not lead.get('phone'):
+            prompt('phone')
+            lead['stage'] = 'phone'
+        elif not lead.get('address'):
+            prompt('address')
+            lead['stage'] = 'address'
+        else:
+            prompt('confirm', **{k: lead.get(k, '') for k in ('size', 'phone', 'address', 'color')})
+            lead['stage'] = 'complete'
+    if (assistance.get('clarification') and assistance.get('scope_stage') == previous.get('stage')
+            and lead.get('stage') not in ('human', 'stopped', 'complete')):
+        # One contextual question replaces all canned prompts for this unresolved step.
+        output.clear()
+        text(assistance['clarification'])
+        lead['stage'] = previous['stage']
     if message['type'] == 'INBOX':
         waiting = {'size', 'size_confirm', 'color', 'phone', 'address', 'confirm', 'contact_reuse_confirm'}
         fields = (*required, 'weight_kg', 'height_cm', 'suggested_size')
         progressed = any(lead.get(k) != previous.get(k) for k in fields) or bool(assistance.get('answers'))
         repeated = lead.get('stage') in waiting and lead.get('stage') == previous.get('stage') and not progressed
         lead['repeat_count'] = previous.get('repeat_count', 0) + 1 if repeated else 0
+        if assistance.get('technical_failure') and repeated:
+            lead['repeat_count'] = previous.get('repeat_count', 0)
         if lead['repeat_count'] >= 3 and not assistance.get('keep_clarifying'):
             output.clear()
             text(script['prompts'].get('repeated_handoff',
                  'Shop chưa hiểu rõ thông tin của chị sau vài lần trao đổi. Chị vui lòng chờ nhân viên hỗ trợ trực tiếp nhé ạ.'))
             lead['stage'] = 'human'
             lead['handoff_reason'] = 'repeated_unresolved_input'
-        if lead.get('stage') not in ('human', 'stopped', 'complete'):
+        if lead.get('stage') not in ('human', 'stopped', 'complete') and not assistance.get('scope_stage'):
             prefix = assistance.get('answers', []) or ([assistance['clarification']] if assistance.get('clarification') else [])
             output[:0] = [{'action': 'reply_inbox', 'message': answer} for answer in prefix]
+    if message['type'] == 'INBOX' and lead.get('stage') == 'color' and output:
+        photos = script.get('product', {}).get('color_photos', [])
+        if photos:
+            output.insert(len(output) - 1, {'action': 'reply_inbox', 'photos': list(photos)})
     return {'rule': 'sales:' + lead.get('stage', 'comment'), 'bodies': output,
             'body': output[0] if output else None, 'lead': lead,
+            'confirmation_snapshot': None if assistance.get('clarification') else confirmation_snapshot(lead, script),
             'next_state': lead['stage'] if lead.get('stage') in ('human', 'complete', 'stopped') else 'sales'}

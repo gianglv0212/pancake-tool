@@ -15,9 +15,11 @@ def old_order_request(text):
     return bool(re.search(r'\b(?:don (?:cu|truoc|vua|cua|chi|em|hang)|doi dia chi|doi size|doi mau|huy don|tra hang|doi tra|giao (?:den|toi) dau|bao gio (?:giao|nhan))\b', n))
 
 
-def lifecycle(script, event, previous):
+def lifecycle(script, event, previous, assistance=None):
     """Return (handled, decision); terminal stages can only reopen through consent."""
     from sales import decide, conversation_intent, is_affirmation
+    from step_support import confirmation_snapshot
+    assistance = assistance or {}
     stage = previous.get('stage')
     if stage not in ('complete', 'stopped', 'reorder_confirm'):
         return False, None
@@ -31,6 +33,7 @@ def lifecycle(script, event, previous):
         lead['stage'] = new_stage
         body = {'action': 'reply_inbox', 'message': script['prompts'].get(key, default)}
         return True, {'rule': 'sales:' + new_stage, 'body': body, 'bodies': [body],
+                      'confirmation_snapshot': None if assistance.get('clarification') else confirmation_snapshot(lead, script),
                       'lead': lead, 'next_state': 'human' if new_stage == 'human' else new_stage}
 
     # An old-order question never opens a new purchase, even if mixed with a reorder.
@@ -38,7 +41,8 @@ def lifecycle(script, event, previous):
         lead['handoff_reason'] = 'existing_order_support'
         return reply('old_order_human', 'Shop đã ghi nhận yêu cầu về đơn trước. Chị vui lòng chờ nhân viên kiểm tra và hỗ trợ nhé ạ.', 'human')
     if stage == 'reorder_confirm':
-        if is_affirmation(text):
+        bound = assistance.get('confirmed_snapshot')
+        if is_affirmation(text) or (bound and bound == confirmation_snapshot(previous, script)):
             fresh = {'stage': 'start', 'introduced': True, 'repeat_count': 0,
                      'session_id': 'reorder:' + str(message['id'])}
             contact = {k: previous[k] for k in ('phone', 'address') if previous.get(k)}
@@ -55,8 +59,11 @@ def lifecycle(script, event, previous):
             origin = lead.pop('reorder_origin', 'complete')
             lead.pop('repeat_count', None)
             return reply('reorder_cancel', 'Dạ shop chưa mở phiên mua mới. Thông tin trước đó vẫn được giữ nguyên ạ.', origin)
-        lead['repeat_count'] = lead.get('repeat_count', 0) + 1
-        if lead['repeat_count'] >= 3:
+        if assistance.get('clarification') and assistance.get('scope_stage') == stage:
+            lead['repeat_count'] = lead.get('repeat_count', 0) + 1
+            return reply('_contextual_question', assistance['clarification'], stage)
+        lead['repeat_count'] = lead.get('repeat_count', 0) + (0 if assistance.get('technical_failure') else 1)
+        if lead['repeat_count'] >= 3 and not assistance.get('keep_clarifying'):
             lead['handoff_reason'] = 'repeated_reorder_confirmation'
             return reply('human', 'Chị vui lòng chờ nhân viên hỗ trợ nhé ạ.', 'human')
         return reply('reorder_confirm', 'Chị muốn đặt thêm một đơn mới phải không ạ? Chị nhắn “đúng rồi” để bắt đầu, hoặc “không” nếu chưa muốn mua thêm nhé.', 'reorder_confirm')

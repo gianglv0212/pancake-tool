@@ -1,9 +1,10 @@
 import unittest
+import threading
 from datetime import datetime, timezone
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import test_bot
 from test_bot import event
-from polling import ApiError, poll_page, read_messages
+from polling import ApiError, poll_page, read_messages, run
 from bot import Store
 
 
@@ -74,3 +75,18 @@ class PollTests(unittest.TestCase):
         e['data']['conversation']['tags'] = [None, {'id': 7}]
         self.config['pages']['p1']['stop_tags'] = [7]
         self.assertIsNone(plan(self.config, e))
+
+    def test_multi_page_worker_pool(self):
+        self.config['worker_count'] = 2
+        self.config['pages'] = {page: {'enabled': True, 'page_access_token': 'test'}
+                                for page in ('p1', 'p2')}
+        barrier = threading.Barrier(2)
+        def process(*args, **kwargs):
+            barrier.wait(timeout=5)
+            return False
+        with patch('polling.Client'), patch('polling.poll_page') as poll, \
+                patch('polling.process_one', side_effect=process) as worker, \
+                patch('discounts.run_due'):
+            run(self.config, self.store, once=True)
+        self.assertEqual([call.args[3] for call in poll.call_args_list], ['p1', 'p2'])
+        self.assertEqual(worker.call_count, 2)

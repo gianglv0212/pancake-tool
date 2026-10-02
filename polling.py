@@ -2,6 +2,8 @@
 import json
 import logging
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -24,10 +26,12 @@ class ApiError(Exception):
 class Client:
     def __init__(self, pages):
         self.pages, self.last = pages, {}
+        self.locks = {page: threading.Lock() for page in pages}
 
     def throttle(self, page):
-        time.sleep(max(0, .25 - (time.monotonic() - self.last.get(page, 0))))
-        self.last[page] = time.monotonic()
+        with self.locks[page]:
+            time.sleep(max(0, .25 - (time.monotonic() - self.last.get(page, 0))))
+            self.last[page] = time.monotonic()
 
     def get(self, version, page, suffix, params):
         query = dict(params, page_access_token=page_token(self.pages[page]))
@@ -141,6 +145,10 @@ def run(config, store, live=False, once=False):
             page_token(page)
     store.recover()
     LOG.info('Polling %s; interval=%ss; no webhook required', 'LIVE' if live else 'DRY RUN', interval)
+    def drain():
+        while process_one(store, config, live, sender=client.send):
+            pass
+
     try:
         while True:
             for page, options in config['pages'].items():
@@ -151,8 +159,10 @@ def run(config, store, live=False, once=False):
                 except (ApiError, ValueError, KeyError, TypeError, AttributeError) as error:
                     LOG.error('page=%s poll failed: %s; retry next cycle', page,
                               str(error) if isinstance(error, ApiError) else type(error).__name__)
-                while process_one(store, config, live, sender=client.send):
-                    pass
+            with ThreadPoolExecutor(max_workers=config.get('worker_count', 1)) as workers:
+                futures = [workers.submit(drain) for _ in range(config.get('worker_count', 1))]
+                for future in futures:
+                    future.result()
             from discounts import run_due
             run_due(store,config,client,live)
             if once:

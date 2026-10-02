@@ -1,8 +1,9 @@
 {
   "poll_interval_seconds": 10,
   "max_event_age_seconds": 600,
-  "pages": {
-    "YOUR_FACEBOOK_PAGE_ID": {
+  "pages": [
+    {
+      "page_id": "YOUR_FACEBOOK_PAGE_ID",
       "enabled": true,
       "token_env": "PANCAKE_PAGE_1_TOKEN",
       "page_access_token": "",
@@ -76,9 +77,22 @@
         "timeout_seconds": 5,
         "max_output_tokens": 512,
         "max_input_bytes": 16000,
-        "faq": [],
         "api_key": ""
       }
+    },
+    {
+      "page_id": "YOUR_SECOND_FACEBOOK_PAGE_ID",
+      "enabled": false,
+      "page_access_token": "",
+      "token_env": "PANCAKE_PAGE_2_TOKEN",
+      "skip_assigned": true,
+      "stop_tags": [],
+      "sales_script": "sales-script.multi-page.example.json",
+      "rules": [],
+      "llm": {
+        "enabled": false
+      }
     }
-  }
+  ],
+  "worker_count": 4
 }

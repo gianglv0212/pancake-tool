@@ -12,8 +12,10 @@ from sales import decide, select_script
 from llm import assist, settings, reserve, validate_result, request_model
 
 
-def interpretation(updates=None, faq_ids=None, intent='inform', unclear=False):
-    return dict(intent=intent, updates=updates or [], faq_ids=faq_ids or [], needs_clarification=unclear)
+def interpretation(updates=None, intent='inform', unclear=False, reply=None, evidence=''):
+    return dict(intent=intent, updates=updates or [], needs_clarification=unclear,
+                evidence=evidence,
+                reply=reply if reply is not None else ('Chị đang phân vân giữa những size nào ạ?' if unclear else ''))
 
 
 def update(field, value, evidence):
@@ -133,23 +135,19 @@ class LLMTests(unittest.TestCase):
             with patch.dict(os.environ, {'OPENAI_API_KEY': 'fake'}), patch('llm.request_model', return_value=value):
                 self.assertIsNone(self.call(mid=str(i)))
 
-    def test_faq_is_fixed_free_and_resets_repeat_counter(self):
-        page = self.page(faq=[dict(id='size_help', keywords=['bảng size'], answer='Câu trả lời shop đã duyệt.')])
-        previous = dict(stage='size', introduced=True, repeat_count=2)
-        with patch('llm.request_model') as model:
-            assistance = self.call('bảng size', previous, page, live=False)
-            model.assert_not_called()
-        result = decide(page['_sales_script'], event('bảng size'), previous, assistance)
-        self.assertEqual(result['lead']['stage'], 'size')
-        self.assertEqual(result['lead']['repeat_count'], 0)
-        self.assertEqual(result['body']['message'], 'Câu trả lời shop đã duyệt.')
-
-    def test_model_faq_uses_only_configured_answer(self):
-        page = self.page(faq=[dict(id='size_help', keywords=['bảng size'], answer='Fixed answer')])
-        with patch.dict(os.environ, {'OPENAI_API_KEY': 'fake'}), patch('llm.request_model', return_value=response(interpretation(faq_ids=['size_help']))):
-            self.assertEqual(self.call('tư vấn cỡ áo với', page=page)['answers'], ['Fixed answer'])
+    def test_legacy_faq_is_ignored_and_not_sent_to_model(self):
+        page = self.page(api_key='fake', faq=[dict(id='old', keywords=['55'], answer='OLD_FAQ_CONTENT')])
+        with patch('llm.request_model', return_value=response(interpretation(
+                [update('weight_kg', '55', '55')]))) as model:
+            result = self.call('55', page=page)
+        self.assertEqual(result['updates'], {'weight_kg': 55.0})
+        self.assertNotIn('answers', result)
+        self.assertNotIn('faq', page['llm'])
+        payload = model.call_args.args[0].decode()
+        self.assertNotIn('faq', payload.lower())
+        self.assertNotIn('OLD_FAQ_CONTENT', payload)
         with self.assertRaises(ValueError):
-            validate_result(interpretation(faq_ids=['invented']), 'hi', {}, page['_sales_script'], page['llm'])
+            validate_result(dict(interpretation(), faq_ids=['old']), '55', {}, page['_sales_script'], page['llm'])
 
     def test_validator_rejects_fabrication_negation_and_alternatives(self):
         page = self.page()
@@ -162,17 +160,19 @@ class LLMTests(unittest.TestCase):
                              ('0912345678 0987654321', update('phone', '0912345678', '0912345678')),
                              ('55', update('weight_kg', '55', '55'))]:
             with self.subTest(text=text):
-                result = validate_result(interpretation([change]), text, {}, page['_sales_script'], page['llm'])
-                self.assertIsNone(result)
-        result = validate_result(interpretation([update('size', 'L', 'L')]), 'L cho chị nha', {}, page['_sales_script'], page['llm'])
+                stage = 'size' if change['field']=='size' else change['field']
+                with self.assertRaises(ValueError):
+                    validate_result(interpretation([change]), text, {'stage':stage}, page['_sales_script'], page['llm'])
+        result = validate_result(interpretation([update('size', 'L', 'L')]), 'L cho chị nha', {'stage':'size'}, page['_sales_script'], page['llm'])
         self.assertEqual(result['updates'], {'size': 'L'})
 
     def test_model_cannot_complete_stop_or_handoff(self):
         page = self.page()
         previous = dict(stage='confirm', introduced=True, size='M', phone='0912345678', address='12 đường A phường B Hà Nội')
         for intent in ('stop', 'human', 'confirm'):
-            assistance = validate_result(interpretation(intent=intent), 'ừ em', previous, page['_sales_script'], page['llm'])
-            result = decide(page['_sales_script'], event('ừ em'), previous, assistance)
+            with self.assertRaises(ValueError):
+                validate_result(interpretation(intent=intent, evidence='ừ em'), 'ừ em', previous, page['_sales_script'], page['llm'])
+            result = decide(page['_sales_script'], event('ừ em'), previous)
             self.assertEqual(result['lead']['stage'], 'confirm')
             self.assertEqual(result['next_state'], 'sales')
 
@@ -201,9 +201,71 @@ class LLMTests(unittest.TestCase):
             assistance = self.call('L cho chị nha, 0912345678', previous,
                                    self.page(api_key='fake'))
         self.assertEqual(assistance['updates'], {'size': 'L'})
-        context = json.loads(json.loads(model.call_args.args[0])['input'])
+        context = json.loads(json.loads(model.call_args.args[0])['input'][0]['content'])
         self.assertEqual(context['expected_field'], 'size')
         self.assertEqual(context['parser_updates']['phone'], '0912345678')
+
+    def test_standalone_address_at_every_active_stage_avoids_model(self):
+        address = 'thôn la thạch, xã liên minh, hà nội'
+        for stage in ('size', 'size_confirm', 'color', 'phone', 'address', 'confirm'):
+            with self.subTest(stage=stage):
+                previous = dict(stage=stage, introduced=True)
+                if stage in ('phone','address','confirm'):
+                    previous['size'] = 'M'
+                page = self.page(api_key='fake')
+                decision = decide(page['_sales_script'], event(address), previous)
+                self.assertEqual(decision['lead']['address'], address)
+                self.assertEqual(decision['lead']['stage'], 'phone' if previous.get('size') else 'size')
+                with patch('llm.request_model') as model:
+                    self.assertIsNone(self.call(address, previous, page, mid=stage))
+                    model.assert_not_called()
+                # Repeating an already saved address is also a free deterministic path.
+                with patch('llm.request_model') as model:
+                    self.assertIsNone(self.call(address, decision['lead'], page, mid=stage+'-repeat'))
+                    model.assert_not_called()
+
+    def test_unlabelled_location_when_waiting_for_address_is_saved_without_llm(self):
+        from sales import extract
+        page = self.page(api_key='fake')
+        previous = dict(stage='address',size='M',phone='0912345678',introduced=True,repeat_count=2)
+        for text in ['La thạch, xã liên minh, hà nội',
+                     'La Thạch, xã Liên Minh, thành phố Hà Nội']:
+            with self.subTest(text=text):
+                decision = decide(page['_sales_script'],event(text),previous)
+                self.assertEqual(decision['lead']['address'],text)
+                self.assertEqual(decision['lead']['stage'],'confirm')
+                self.assertEqual(decision['lead']['repeat_count'],0)
+                with patch('llm.request_model') as model:
+                    self.assertIsNone(self.call(text,previous,page))
+                    model.assert_not_called()
+                self.assertNotIn('address',extract(text,{'stage':'size'}))
+        for text in ['La thạch, xã liên minh', 'xã liên minh, hà nội',
+                     'La thạch, xã liên minh, hà nội, ship bao lâu?',
+                     'La thạch hay chỗ khác, xã liên minh, hà nội']:
+            with self.subTest(rejected=text):
+                self.assertNotIn('address',extract(text,previous))
+        with self.store.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM llm_calls').fetchone()[0],0)
+
+    def test_address_questions_and_incomplete_locations_still_use_model(self):
+        samples = ['xã liên minh, hà nội',
+                   'thôn la thạch, xã liên minh, hà nội, ship bao lâu?',
+                   'thôn la thạch hay thôn khác, xã liên minh, hà nội',
+                   'thôn la thạch, xã liên minh, hà nội, tư vấn thêm cho chị']
+        from sales import address_only
+        for i, text in enumerate(samples):
+            with self.subTest(text=text):
+                self.assertIsNone(address_only(text))
+                with patch('llm.request_model', return_value=response(interpretation(unclear=True))) as model:
+                    self.call(text, page=self.page(api_key='fake'), mid='address-question-'+str(i))
+                    model.assert_called_once()
+                previous = dict(stage='address',size='M',phone='0912345678',introduced=True)
+                page = self.page(api_key='fake')
+                decision = decide(page['_sales_script'],event(text),previous)
+                self.assertNotIn('address',decision['lead'])
+                with patch('llm.request_model', return_value=response(interpretation(unclear=True, reply='Chị cho em rõ phần địa chỉ nhận hàng nhé?'))) as model:
+                    self.call(text, previous, page, mid='waiting-address-'+str(i))
+                    model.assert_called_once()
 
     def test_plain_text_trace_shows_request_response_and_rejected_updates(self):
         secret = 'llm-trace-test-secret'
@@ -212,12 +274,14 @@ class LLMTests(unittest.TestCase):
                     [update('size', 'M', 'M')], unclear=True))):
             self.call('M hay L ' + secret, page=self.page(api_key=secret))
         log = '\n'.join(captured.output)
-        for value in ('step=llm_request', 'step=llm_response', 'step=llm_interpretation',
-                      'step=llm_validation', 'needs_clarification=true',
+        for value in ('step=llm_call_reason', 'expected_field', 'changed_fields',
+                      'standalone_address_detected', 'step=llm_request', 'step=llm_response', 'step=llm_interpretation',
+                      'step=llm_validation', 'Uncertain response cannot mutate data',
                       'page=p1 conversation=c1 message=m1', 'M hay L'):
             self.assertIn(value, log)
         self.assertNotIn(secret, log)
         self.assertIn('[REDACTED]', log)
+        self.assertLess(log.index('step=llm_call_reason'), log.index('step=llm_request'))
 
     def test_timeout_trace_identifies_message_and_fallback(self):
         with self.assertLogs('pancake.llm', level='INFO') as captured, \
@@ -235,8 +299,7 @@ class LLMTests(unittest.TestCase):
         process_one(self.store, self.config)
         for index in range(5):
             self.store.enqueue(event('chưa rõ lắm', message_id='unclear-' + str(index)))
-            with patch('llm.request_model', return_value=response(interpretation(
-                    [update('size', 'M', 'M')], unclear=True)),
+            with patch('llm.request_model', return_value=response(interpretation(unclear=True)),
                     side_effect=TimeoutError if index == 4 else None), \
                     patch('media.prepare', side_effect=lambda s,p,t,b: b), patch('bot.time.sleep'):
                 sent = []
@@ -245,13 +308,13 @@ class LLMTests(unittest.TestCase):
             lead = self.store.lead('p1', 'c1')
             self.assertEqual(lead['stage'], 'size')
             self.assertNotIn('size', lead)
-            self.assertTrue(any(body.get('message') == page['_sales_script']['prompts']['size_unclear']
-                                for body in sent))
+            expected = interpretation(unclear=True)['reply'] if index < 4 else page['_sales_script']['prompts']['size_unclear']
+            self.assertEqual(sent, [{'action':'reply_inbox','message':expected}])
 
     def test_config_validation(self):
         for invalid in [{'api_key': 123}, {'enabled': 'false'}, {'daily_budget_usd': -1}, {'daily_budget_usd': float('nan')},
                         {'model': 'unpriced-model'}, {'max_calls_per_conversation': 1.5},
-                        {'faq': [{'id': 'x', 'keywords': [], 'answer': ''}]}, {'enable': True}]:
+                        {'enable': True}]:
             with self.assertRaises(ValueError):
                 settings(invalid)
         path = Path(self.tmp.name) / 'config.json'

@@ -40,8 +40,23 @@ def page_token(page):
 
 def load_config(path):
     config = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if isinstance(config.get('pages'), list):
+        pages = {}
+        for entry in config['pages']:
+            if not isinstance(entry, dict) or not str(entry.get('page_id') or '').strip():
+                raise ValueError('Each pages entry requires a page_id')
+            page_id = str(entry['page_id']).strip()
+            if page_id in pages:
+                raise ValueError('Duplicate page_id: ' + page_id)
+            pages[page_id] = {k: v for k, v in entry.items() if k != 'page_id'}
+        config['pages'] = pages
     if not config.get("pages"):
         raise ValueError("pages must not be empty")
+    if not isinstance(config['pages'], dict):
+        raise ValueError('pages must be an array of page configurations or an object keyed by page ID')
+    count = config.setdefault('worker_count', 1)
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 32:
+        raise ValueError('worker_count must be an integer from 1 to 32')
     for page_id, page in config["pages"].items():
         if page.get('sales_script'):
             script_path = Path(path).resolve().parent / page['sales_script']
@@ -239,7 +254,10 @@ class Store:
     def claim(self):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT * FROM jobs WHERE status='pending' ORDER BY id LIMIT 1").fetchone()
+            row = db.execute("""SELECT j.* FROM jobs j WHERE j.status='pending'
+                AND NOT EXISTS (SELECT 1 FROM jobs active WHERE active.status='processing'
+                    AND active.page=j.page AND active.conversation=j.conversation)
+                ORDER BY j.id LIMIT 1""").fetchone()
             if row:
                 db.execute("UPDATE jobs SET status='processing' WHERE id=?", (row["id"],))
             return row
@@ -309,14 +327,16 @@ def process_one(store, config, live=False, sender=send):
         if page.get('_sales_script'):
             from sales import decide
             previous = store.lead(job['page'], job['conversation'])
-            decision = (decide(page['_sales_script'], event, previous)
+            decision = (decide(page['_sales_script'], event, previous,
+                               relaxed_address=not page.get('llm', {}).get('enabled'))
                         if plan(config, event, state, validate_only=True, lead=previous) else None)
             if decision and page.get('llm', {}).get('enabled'):
                 from llm import assist, trace
                 previous = store.lead(job['page'], job['conversation'])
                 assistance = assist(store, page, event, previous, decision, live=live)
                 decision = decide(page['_sales_script'], event, previous,
-                                  {**(assistance or {}), 'keep_clarifying': True})
+                                  {**(assistance or {}), 'keep_clarifying': True,
+                                   'technical_failure': live and assistance is None})
                 trace(event, 'llm_final_decision', {
                     'previous_stage': previous.get('stage', 'start'),
                     'stage': decision['lead'].get('stage') if decision else None,
@@ -437,8 +457,9 @@ def serve(config, store, host, port, live):
                 worked = False
             stop.wait(0.25 if worked else 0.5)
 
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
+    threads = [threading.Thread(target=worker, daemon=True) for _ in range(config.get('worker_count', 1))]
+    for thread in threads:
+        thread.start()
     server = ThreadingHTTPServer((host, port), Handler)
     LOG.info("Listening on %s:%s mode=%s", host, port, "LIVE" if live else "DRY RUN")
     try:
@@ -448,7 +469,8 @@ def serve(config, store, host, port, live):
     finally:
         server.server_close()
         stop.set()
-        thread.join(timeout=25)
+        for thread in threads:
+            thread.join(timeout=25)
 
 
 def main():

@@ -24,12 +24,12 @@ class SalesTests(unittest.TestCase):
         for message, stage in [('size M', 'color'), ('đỏ hay xanh?', 'color'),
                                ('không lấy đỏ', 'color'),
                                ('đỏ', 'phone'), ('0912345678', 'address'),
-                               ('12 đường A, phường B, tỉnh C', 'confirm'),
-                               ('đổi màu xanh', 'confirm'), ('đúng rồi', 'complete')]:
+                               ('đổi màu xanh', 'address'),
+                               ('12 đường A, phường B, tỉnh C', 'complete')]:
             result = decide(script, event(message), lead)
             lead = result['lead']
             self.assertEqual(lead['stage'], stage, message)
-            if stage == 'confirm':
+            if stage == 'complete':
                 self.assertIn(lead['color'], result['body']['message'])
         self.assertEqual(lead['color'], 'Xanh')
 
@@ -43,6 +43,35 @@ class SalesTests(unittest.TestCase):
         self.assertNotIn('color', extract_color('12 đường Đỏ, phường B, tỉnh C', {}, ['Đỏ']))
         changed = extract_color('đổi màu tím', {'color': 'Đỏ'}, ['Đỏ'])
         self.assertNotIn('color', changed)
+
+    def test_multiple_colors(self):
+        from sales import extract_color
+        colors = ['Đỏ', 'Xanh', 'Vàng']
+        for text, expected in [('đỏ và xanh', 'Đỏ, Xanh'), ('chị lấy xanh, đỏ', 'Xanh, Đỏ'),
+                               ('1 bộ đỏ 1 bộ vàng', 'Đỏ, Vàng'), ('đỏ đỏ xanh', 'Đỏ, Xanh')]:
+            self.assertEqual(extract_color(text, {'stage': 'color'}, colors)['color'], expected)
+        previous = {'stage': 'phone', 'color': 'Đỏ, Xanh'}
+        self.assertEqual(extract_color('0912345678', previous, colors)['color'], 'Đỏ, Xanh')
+        self.assertEqual(extract_color('đổi màu vàng và xanh', previous, colors)['color'], 'Vàng, Xanh')
+        for text in ('đỏ hay xanh', 'đỏ hoặc xanh', 'không lấy đỏ và xanh', 'đỏ và tím',
+                     '12 đường Đỏ, phường Xanh, tỉnh C'):
+            self.assertNotIn('color', extract_color(text, {'stage': 'color'}, colors))
+
+    def test_rapid_messages_introduce_product_once(self):
+        script = self.script()
+        self.config['pages']['p1']['_sales_script'] = script
+        self.config['pages']['p1']['llm']['enabled'] = False
+        for index, message in enumerate(('giá bao nhiêu', 'xin ảnh', 'chất liệu', '55kg')):
+            self.store.enqueue(event(message, message_id='burst-' + str(index)))
+        while process_one(self.store, self.config):
+            pass
+        with self.store.connect() as db:
+            results = [json.loads(row[0]) for row in db.execute('SELECT result FROM jobs ORDER BY id')]
+        introduction = script['groups']['2'][0]['message'].replace('#{FULL_NAME}', 'Lan')
+        sent = [body.get('message') for result in results for body in result.get('bodies', [])]
+        self.assertEqual(sent.count(introduction), 1)
+        self.assertTrue(self.store.lead('p1', 'c1')['introduced'])
+        self.assertEqual(self.store.lead('p1', 'c1')['size'], 'M')
 
     def test_load_page_scripts_and_missing_page(self):
         from pathlib import Path
@@ -65,22 +94,43 @@ class SalesTests(unittest.TestCase):
 
     def test_import_order_and_photos(self):
         groups = self.script()['groups']
-        self.assertEqual(list(groups), ['0','1','2','3','4','5'])
+        self.assertEqual(list(groups), ['2','3','4','5'])
+        self.assertNotIn('complete', self.script()['prompts'])
         self.assertEqual(len(groups['2']), 4)
         self.assertEqual(len(groups['2'][1]['photos']), 3)
         self.assertIn('429k', groups['2'][0]['message'])
 
     def test_full_conversation(self):
+        script = self.script()
+        script['product']['colors'] = ['Đỏ', 'Xanh']
+        script['product']['color_photos'] = ['https://example.com/colors.jpg']
         lead = {}
-        for text, stage in [('bao nhiêu tiền', 'size'), ('chị 55kg cao 1m60', 'size_confirm'),
-                            ('ok', 'phone'), ('0912 345 678', 'address'),
-                            ('12 đường A, phường B, thành phố Hà Nội', 'confirm'), ('đúng rồi', 'complete')]:
-            decision = decide(self.script(), event(text), lead)
+        for text, stage in [('bao nhiêu tiền', 'size'), ('chị 55kg cao 1m60', 'color'),
+                            ('đỏ', 'phone'), ('0912 345 678', 'address'),
+                            ('12 đường A, phường B, thành phố Hà Nội', 'complete')]:
+            decision = decide(script, event(text), lead)
             lead = decision['lead']
             self.assertEqual(lead['stage'], stage)
+            if stage == 'color':
+                self.assertEqual(lead['size'], 'M')
+                self.assertNotIn('suggested_size', lead)
+                self.assertIn(script['prompts']['size_confirm'].format(size='M'),
+                              [body.get('message') for body in decision['bodies']])
+                self.assertEqual(decision['bodies'][-1]['message'],
+                                 script['prompts']['color'].format(colors='Đỏ, Xanh'))
+                self.assertEqual(decision['bodies'][-2], {
+                    'action': 'reply_inbox', 'photos': script['product']['color_photos']})
+            else:
+                self.assertFalse(any(body.get('photos') == script['product']['color_photos']
+                                     for body in decision['bodies']))
         self.assertEqual(lead['size'], 'M')
         self.assertEqual(lead['phone'], '0912345678')
         self.assertEqual(lead['height_cm'], 160)
+        self.assertEqual(decision['next_state'], 'complete')
+        self.assertEqual(len(decision['bodies']), 1)
+        self.assertEqual(script['prompts']['confirm'].format(**lead), decision['body']['message'])
+        self.assertIsNone(decision['confirmation_snapshot'])
+        self.assertIsNone(decide(script, event('đúng rồi'), lead))
 
     def test_all_fields_and_correction(self):
         first = decide(self.script(), event('size XL; SĐT 0912345678; địa chỉ: 12 đường A, phường B, tỉnh C'), {})
@@ -98,6 +148,18 @@ class SalesTests(unittest.TestCase):
         self.assertNotIn('address', extract('Hà Nội', {'stage': 'address'}))
         self.assertNotIn('address', extract('12 đường A phường B', {'stage': 'address'}))
         self.assertEqual(extract('+84 912 345 678', {})['phone'], '0912345678')
+
+    def test_relaxed_address_without_llm(self):
+        for address in ('12 đường A phường B', 'xóm đoàn kết, la thạch, liên minh, hà nội',
+                        '123 Nguyễn Trãi, Hà Nội', 'Ấp Bình Hòa, Long An'):
+            with self.subTest(address=address):
+                self.assertEqual(extract(address, {'stage': 'address'}, relaxed_address=True)['address'], address)
+        for text in ('ok chị nhé', 'cảm ơn em nhé', 'để chị gửi sau', '0912 345 678',
+                     'ship bao nhiêu tiền?', 'size M cho chị'):
+            with self.subTest(text=text):
+                self.assertNotIn('address', extract(text, {'stage': 'address'}, relaxed_address=True))
+        self.assertNotIn('address', extract('123 Nguyễn Trãi, Hà Nội', {'stage': 'size'}, relaxed_address=True))
+        self.assertNotIn('address', extract('12 đường A phường B', {'stage': 'address'}))
 
     def test_comment_does_not_claim_private_message_sent(self):
         result = decide(self.script(), event('giá', 'COMMENT'), {})
@@ -136,6 +198,23 @@ class SalesTests(unittest.TestCase):
                         'size M có vừa không?', 'không lấy size M', 'size M; size L',
                         'chưa muốn lấy M', 'size M có vừa']:
             self.assertNotIn('size', extract(message, {}), message)
+
+    def test_weight_without_height_maps_size(self):
+        script = self.script()
+        for message, size in [('42kg', 'S'), ('48 ký', 'S'), ('49kg', 'M'),
+                              ('55', 'M'), ('chị nặng 55', 'M'), ('cân nặng: 55', 'M'),
+                              ('56kg', 'L'), ('61kg', 'L'), ('62kg', 'XL'),
+                              ('69kg', 'XL'), ('70kg', '2XL'), ('80kg', '2XL')]:
+            with self.subTest(message=message):
+                result = decide(script, event(message), {'stage': 'size', 'introduced': True})
+                self.assertEqual(result['lead']['size'], size)
+                self.assertNotIn('height_cm', result['lead'])
+                self.assertNotEqual(result['lead']['stage'], 'size')
+                self.assertIn(script['prompts']['size_confirm'].format(size=size),
+                              [body.get('message') for body in result['bodies']])
+        self.assertNotIn('weight_kg', extract('55', {'stage': 'phone'}))
+        for message in ('160', '55 hay 60', '0912345678'):
+            self.assertNotIn('size', decide(script, event(message), {'stage': 'size', 'introduced': True})['lead'])
 
     def test_natural_confirmation_is_contextual(self):
         lead = dict(introduced=True, stage='confirm', size='M', phone='0912345678',

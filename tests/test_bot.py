@@ -62,6 +62,47 @@ class BotTests(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertEqual(self.store.state("p1", "c1"), "awaiting_location")
 
+    def test_claim_serializes_each_conversation(self):
+        self.store.enqueue(event('giá', message_id='m1'))
+        self.store.enqueue(event('xin ảnh', message_id='m2'))
+        other = event('giá', message_id='m3')
+        other['data']['conversation']['id'] = 'c2'
+        other['data']['message']['conversation_id'] = 'c2'
+        self.store.enqueue(other)
+        first = self.store.claim()
+        another_worker = Store(self.store.path)
+        second = another_worker.claim()
+        self.assertEqual(first['message'], 'm1')
+        self.assertEqual(second['conversation'], 'c2')
+        self.assertIsNone(another_worker.claim())
+        self.store.finish(first, 'sent', '{}', lead={'introduced': True})
+        third = another_worker.claim()
+        self.assertEqual(third['message'], 'm2')
+        self.assertTrue(another_worker.lead('p1', 'c1')['introduced'])
+
+    def test_page_array_and_page_specific_scripts(self):
+        path = os.path.join(self.tmp.name, 'config.json')
+        script_path = os.path.join(self.tmp.name, 'scripts.json')
+        scripts = {'pages': {page: {'groups': {'2': [{'message': page}]}, 'prompts': {}}
+                             for page in ('p1', 'p2')}}
+        with open(script_path, 'w', encoding='utf-8') as file:
+            json.dump(scripts, file)
+        config = {'worker_count': 2, 'pages': [
+            {'page_id': page, 'sales_script': 'scripts.json', 'token_env': page + '_TOKEN'}
+            for page in ('p1', 'p2')]}
+        with open(path, 'w', encoding='utf-8') as file:
+            json.dump(config, file)
+        loaded = load_config(path)
+        self.assertEqual(loaded['worker_count'], 2)
+        for page in ('p1', 'p2'):
+            self.assertEqual(loaded['pages'][page]['_sales_script']['groups']['2'][0]['message'], page)
+            self.assertEqual(loaded['pages'][page]['token_env'], page + '_TOKEN')
+        config['pages'].append(config['pages'][0])
+        with open(path, 'w', encoding='utf-8') as file:
+            json.dump(config, file)
+        with self.assertRaisesRegex(ValueError, 'Duplicate page_id'):
+            load_config(path)
+
     def test_multistep_queued_events(self):
         self.store.enqueue(event())
         followup = event("Hà Nội", message_id="m2")

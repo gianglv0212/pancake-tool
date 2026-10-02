@@ -1,5 +1,32 @@
 # Pancake Auto Reply — Python
 
+LLM hỗ trợ parser theo từng bước và hỏi lại theo nội dung khách:
+[hướng dẫn hiện tại](LLM-STEPS.md). Luồng bán hàng chính vẫn do code xử lý.
+
+## Các mục kịch bản đang dùng
+
+Sửa `sales-script.json` theo từng page. Luồng hiện tại: size → màu → SĐT → địa chỉ
+→ gửi `prompts.confirm` và kết thúc; trường đã biết sẽ được bỏ qua.
+
+| Mục | Công dụng |
+| --- | --- |
+| `groups.2` | Giới thiệu, giá, ảnh và câu hỏi chiều cao/cân nặng |
+| `groups.3` | Bảng size khi khách hỏi size |
+| `groups.4` | Hỏi khách chọn size sau bảng size |
+| `groups.5` | Hỏi lại chiều cao/cân nặng trong luồng không dùng LLM |
+| `prompts.comment` | Trả lời bình luận |
+| `prompts.size_confirm` | Thông báo size từ cân nặng, rồi chuyển bước ngay; không chờ xác nhận |
+| `prompts.size_unclear` | Hỏi lại khi chưa xác định được size |
+| `prompts.color` | Hỏi màu; dùng biến `{colors}` |
+| `prompts.phone`, `prompts.address` | Hỏi thông tin nhận hàng còn thiếu |
+| `prompts.confirm` | Tin kết thúc; dùng `{size}`, `{color}`, `{phone}`, `{address}` |
+| `prompts.human`, `prompts.stop` | Thông báo chuyển nhân viên hoặc dừng theo yêu cầu |
+| `product.colors` | Danh sách màu; để `[]` nếu shop không cần hỏi màu |
+| `product.color_photos` | Danh sách URL ảnh gửi sau tin hỏi màu, theo thứ tự trong danh sách; `[]` để không gửi ảnh |
+
+Đã bỏ `groups.0`, `groups.1`, `prompts.complete` và cấu hình `llm.faq` vì không còn
+được dùng. Giữ số nhóm 2–5 để tương ứng với nguồn nhập `reply-quicks.md`.
+
 Job giảm giá tùy chọn: [DISCOUNT-FOLLOWUP.md](DISCOUNT-FOLLOWUP.md).
 Sửa `discount_followup` của từng page trong `config.json` để bật/tắt, đặt giá và nội dung.
 
@@ -101,7 +128,30 @@ python bot.py serve
 
 Sửa `config.json`: thay `YOUR_FACEBOOK_PAGE_ID` bằng ID page thật. Lấy Page Access Token
 tại Pancake → page → Cài đặt → Công cụ. Đây là token Pancake của từng page.
-Thêm các page khác vào `pages`, mỗi page có `token_env` và `rules` riêng.
+Thêm các page khác vào mảng `pages`, mỗi page có `page_id`, token và kịch bản riêng.
+`config.example.json` có sẵn hai page mẫu; page thứ hai đang `enabled: false`.
+Để dùng luồng bán hàng, thêm `sales_script: "sales-script.multi-page.example.json"`
+vào page và sửa ID tương ứng trong file kịch bản. Trong file này, mỗi ID page có
+`groups`, `prompts`, `product` riêng; thêm các tin vào mảng `groups.2`, `groups.3`,
+`groups.4`, `groups.5` theo bước. Cấu hình `pages` dạng object cũ vẫn được hỗ trợ.
+
+```json
+{
+  "worker_count": 4,
+  "pages": [
+    {"page_id": "PAGE_1", "token_env": "PANCAKE_PAGE_1_TOKEN", "sales_script": "sales-script.multi-page.example.json"},
+    {"page_id": "PAGE_2", "token_env": "PANCAKE_PAGE_2_TOKEN", "sales_script": "sales-script.multi-page.example.json"}
+  ]
+}
+```
+
+`worker_count` từ 1 đến 32, mặc định 1. Polling đọc từng page đang bật và đưa tin
+vào hàng đợi chung, sau đó các worker xử lý song song. Webhook dùng cùng số worker
+để xử lý hàng đợi khi tin đến. Worker chọn token và kịch bản theo `page_id` của tin;
+trạng thái lưu riêng theo `(page_id, conversation_id)`. Cùng một cuộc trò chuyện
+chỉ có một job đang xử lý, các cuộc trò chuyện khác có thể chạy song song, kể cả
+trên cùng page. Các request vẫn được giãn cách theo page trong chế độ polling.
+Một worker có thể phục vụ nhiều page, không cần chạy riêng một tiến trình cho mỗi page.
 Biến môi trường chỉ tồn tại trong phiên PowerShell hiện tại; cấu hình lại khi khởi động lại.
 
 Chạy thử mặc định không gửi API. Xem quyết định trong SQLite:
